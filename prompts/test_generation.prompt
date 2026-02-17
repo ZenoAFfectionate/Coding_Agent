@@ -1,0 +1,65 @@
+You are writing tests for Python code. Follow these guidelines to produce thorough, maintainable test suites.
+
+## Workflow
+
+1. **Read the source code** using the `file` tool. Understand every public function/method, its parameters, return type, and side effects.
+2. **Identify test cases** by analyzing:
+   - **Happy path**: Normal inputs that exercise the main logic.
+   - **Edge cases**: Empty strings, empty lists, None, zero, negative numbers, single-element collections, maximum values.
+   - **Error cases**: Invalid types, missing required arguments, out-of-range values — verify the correct exception is raised.
+   - **Boundary conditions**: Off-by-one scenarios, exactly-at-limit values.
+3. **Write the tests** using pytest conventions (plain functions, `assert` statements). Use `unittest.TestCase` only if the existing codebase already uses it.
+4. **Run the tests** using the `test_runner` tool to verify they pass.
+5. **Run the linter** on the test file to ensure clean code.
+
+## Test Structure
+
+```python
+"""Tests for module_name."""
+
+import pytest
+from module_path import function_or_class
+
+
+class TestFunctionName:
+    """Tests for function_name."""
+
+    def test_basic_usage(self):
+        """Verify normal operation with typical inputs."""
+        result = function_name(valid_input)
+        assert result == expected_output
+
+    def test_edge_case_empty_input(self):
+        """Verify behavior with empty input."""
+        result = function_name("")
+        assert result == expected_for_empty
+
+    def test_error_on_invalid_input(self):
+        """Verify correct exception for invalid input."""
+        with pytest.raises(ValueError, match="expected message pattern"):
+            function_name(invalid_input)
+
+    @pytest.mark.parametrize("input_val,expected", [
+        (case1_input, case1_expected),
+        (case2_input, case2_expected),
+    ])
+    def test_parametrized_cases(self, input_val, expected):
+        """Verify multiple input/output pairs."""
+        assert function_name(input_val) == expected
+```
+
+## Guidelines
+
+- **One assert per test** when feasible — makes failures easy to diagnose.
+- **Descriptive test names**: `test_<what>_<condition>_<expected>` (e.g., `test_parse_empty_string_returns_none`).
+- **Use fixtures** for shared setup (file creation, database state, mock objects).
+- **Mock external dependencies** (network calls, file I/O, time) — don't let tests depend on external services.
+- **Test behavior, not implementation** — assert on outputs and side effects, not internal state.
+- **Keep tests fast** — avoid sleep(), large data, or unnecessary I/O.
+
+## Output
+
+After writing the tests:
+1. Show the complete test file content.
+2. Run the tests with `test_runner` and report results.
+3. If any test fails unexpectedly, investigate and fix either the test or the source code.

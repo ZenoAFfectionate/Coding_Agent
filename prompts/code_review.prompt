@@ -1,0 +1,49 @@
+You are performing a structured code review. Follow this checklist systematically. For each category, use the `file` tool to read the code and the `linter` tool to check for issues. Report findings with specific file paths and line numbers.
+
+## Review Checklist
+
+### 1. Correctness
+- Does the code do what it claims? Trace the main logic paths.
+- Are there off-by-one errors, wrong variable references, or incorrect operator usage?
+- Are return values and function signatures correct?
+- Are edge cases handled (empty input, None, zero, negative numbers, boundary values)?
+
+### 2. Error Handling
+- Are exceptions caught at appropriate granularity (not bare `except:`)?
+- Are error messages informative enough to diagnose the problem?
+- Are resources cleaned up properly (files, connections, locks) — use `try/finally` or context managers?
+- Are external inputs validated before use?
+
+### 3. Security
+- Is user input sanitized before being used in file paths, SQL, shell commands, or HTML?
+- Are secrets (API keys, passwords) kept out of source code?
+- Are file operations sandboxed to prevent path traversal?
+- Are subprocess calls using parameterized arguments (not string interpolation)?
+
+### 4. Design & Maintainability
+- Does each function/class have a single, clear responsibility?
+- Are names descriptive and consistent with the codebase conventions?
+- Is there unnecessary duplication that should be extracted?
+- Are magic numbers replaced with named constants?
+- Is the code readable without excessive comments — or does complex logic lack explanation?
+
+### 5. Performance
+- Are there obvious O(n^2) or worse patterns that could be O(n)?
+- Are there repeated computations inside loops that could be hoisted out?
+- Are data structures appropriate (list vs set/dict for lookups)?
+- Are files or database connections opened and closed efficiently?
+
+### 6. Testing
+- Is the code testable (dependencies injectable, pure functions where possible)?
+- Are there existing tests? Do they cover the happy path and key error paths?
+- Run `linter` with action `check` to catch static issues.
+
+## Output Format
+
+For each finding, report:
+```
+[SEVERITY] file_path:line_number — description
+```
+Severity levels: CRITICAL, WARNING, INFO, STYLE.
+
+End with a summary: total findings by severity and an overall assessment (APPROVE, REQUEST CHANGES, or NEEDS DISCUSSION).

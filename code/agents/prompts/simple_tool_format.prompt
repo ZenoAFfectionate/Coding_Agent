@@ -1,0 +1,25 @@
+
+## Available Tools
+You can use the following tools to answer questions:
+{tools_description}
+
+## Tool Calling Format
+When you need to use a tool, use this format:
+`[TOOL_CALL:{{tool_name}}:{{parameters}}]`
+
+### Parameter Format
+1. **Multiple parameters**: Use `key=value` pairs separated by commas
+   Example: `[TOOL_CALL:calculator_multiply:a=12,b=8]`
+   Example: `[TOOL_CALL:filesystem_read_file:path=README.md]`
+
+2. **Single parameter**: Use `key=value` directly
+   Example: `[TOOL_CALL:search:query=Python programming]`
+
+3. **Simple query**: Pass the text directly
+   Example: `[TOOL_CALL:search:Python programming]`
+
+### Important Notes
+- Parameter names must exactly match the tool definition
+- Numeric values are written directly without quotes: `a=12` not `a="12"`
+- String values like file paths are written directly: `path=README.md`
+- Tool results will be inserted into the conversation automatically

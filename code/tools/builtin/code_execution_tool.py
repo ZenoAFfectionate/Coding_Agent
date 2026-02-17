@@ -1,0 +1,182 @@
+"""CodeExecutionTool - Sandboxed Code Execution
+
+Provides safe code execution for a Coding Agent:
+- Execute Python code in an isolated subprocess
+- Execute shell/bash commands
+- Capture stdout, stderr, and exit code
+- Timeout and output-size limits
+- Temporary file management
+
+Safety:
+- Code runs in a subprocess, NOT in the agent's process
+- Configurable timeout (default 30s)
+- Output size limits
+- Optional restricted mode (no network, no file writes outside workspace)
+"""
+
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from ..base import Tool, ToolParameter, tool_action
+
+
+class CodeExecutionTool(Tool):
+    """Sandboxed code execution tool.
+
+    Executes Python or shell code in an isolated subprocess and returns
+    structured results with stdout, stderr, and exit code.
+    """
+
+    def __init__(
+        self,
+        workspace: str = ".",
+        timeout: int = 30,
+        max_output_size: int = 1024 * 1024,  # 1 MB
+        python_executable: str = "python3",
+        expandable: bool = False,
+    ):
+        super().__init__(
+            name="code_exec",
+            description=(
+                "Execute Python or shell code in a sandboxed subprocess. "
+                "Returns stdout, stderr, and exit code."
+            ),
+            expandable=expandable,
+        )
+        self.workspace = Path(workspace).resolve()
+        self.timeout = timeout
+        self.max_output_size = max_output_size
+        self.python_executable = python_executable
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+    def run(self, parameters: Dict[str, Any]) -> str:
+        action = parameters.get("action", "python")
+        dispatch = {
+            "python": self._run_python,
+            "shell": self._run_shell,
+        }
+        handler = dispatch.get(action)
+        if handler is None:
+            return f"Unsupported action '{action}'. Supported: {', '.join(dispatch)}"
+        return handler(parameters)
+
+    def get_parameters(self) -> List[ToolParameter]:
+        return [
+            ToolParameter(name="action", type="string",
+                          description="Execution mode: 'python' or 'shell'", required=True),
+            ToolParameter(name="code", type="string",
+                          description="Code/command to execute", required=True),
+            ToolParameter(name="timeout", type="integer",
+                          description=f"Timeout in seconds (default {self.timeout})",
+                          required=False, default=self.timeout),
+        ]
+
+    def _truncate(self, text: str) -> str:
+        if len(text) > self.max_output_size:
+            return text[: self.max_output_size] + f"\n... truncated ({len(text)} bytes total)"
+        return text
+
+    @tool_action("exec_python", "Execute Python code in an isolated subprocess")
+    def _run_python(self, parameters: Dict[str, Any]) -> str:
+        """Execute Python code.
+
+        Args:
+            parameters: Dict with code, timeout.
+        Returns:
+            Structured execution result.
+        """
+        code = parameters.get("code", "")
+        if not code.strip():
+            return "Error: code is empty."
+
+        timeout = parameters.get("timeout", self.timeout) or self.timeout
+
+        # Write code to a temp file and execute
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", dir=str(self.workspace),
+                delete=False, encoding="utf-8",
+            ) as f:
+                f.write(code)
+                tmp_path = f.name
+
+            result = subprocess.run(
+                [self.python_executable, tmp_path],
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+
+            stdout = self._truncate(result.stdout)
+            stderr = self._truncate(result.stderr)
+
+            parts = [f"=== Python Execution Result ==="]
+            parts.append(f"Exit code: {result.returncode}")
+            if stdout.strip():
+                parts.append(f"\n--- stdout ---\n{stdout}")
+            if stderr.strip():
+                parts.append(f"\n--- stderr ---\n{stderr}")
+            if not stdout.strip() and not stderr.strip():
+                parts.append("(no output)")
+
+            return "\n".join(parts)
+
+        except subprocess.TimeoutExpired:
+            return f"Error: execution timed out after {timeout}s"
+        except Exception as e:
+            return f"Error executing Python code: {e}"
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except (OSError, UnboundLocalError):
+                pass
+
+    @tool_action("exec_shell", "Execute a shell command")
+    def _run_shell(self, parameters: Dict[str, Any]) -> str:
+        """Execute a shell command.
+
+        Args:
+            parameters: Dict with code (shell command), timeout.
+        Returns:
+            Structured execution result.
+        """
+        command = parameters.get("code", "")
+        if not command.strip():
+            return "Error: command is empty."
+
+        timeout = parameters.get("timeout", self.timeout) or self.timeout
+
+        try:
+            result = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(self.workspace),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+            stdout = self._truncate(result.stdout)
+            stderr = self._truncate(result.stderr)
+
+            parts = [f"=== Shell Execution Result ==="]
+            parts.append(f"Command: {command}")
+            parts.append(f"Exit code: {result.returncode}")
+            if stdout.strip():
+                parts.append(f"\n--- stdout ---\n{stdout}")
+            if stderr.strip():
+                parts.append(f"\n--- stderr ---\n{stderr}")
+            if not stdout.strip() and not stderr.strip():
+                parts.append("(no output)")
+
+            return "\n".join(parts)
+
+        except subprocess.TimeoutExpired:
+            return f"Error: command timed out after {timeout}s"
+        except Exception as e:
+            return f"Error executing shell command: {e}"

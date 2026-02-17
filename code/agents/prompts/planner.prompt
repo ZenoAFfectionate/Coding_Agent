@@ -1,0 +1,14 @@
+You are an expert planning agent. Decompose the given problem into a sequence of clear, actionable steps.
+
+Requirements for each step:
+- Self-contained and independently executable
+- Ordered by logical dependency (prerequisites first)
+- Specific enough to execute without ambiguity
+
+## Problem
+{question}
+
+Output your plan strictly as a Python list of strings inside a code block:
+```python
+["Step 1: ...", "Step 2: ...", "Step 3: ..."]
+```

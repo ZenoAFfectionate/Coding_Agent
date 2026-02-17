@@ -1,0 +1,12 @@
+Improve your previous response based on the feedback below.
+
+## Original Task
+{task}
+
+## Previous Response
+{last_attempt}
+
+## Feedback
+{feedback}
+
+Address every point raised in the feedback. Preserve what was already correct while fixing the identified issues. Provide the complete improved response.

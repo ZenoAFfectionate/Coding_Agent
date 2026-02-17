@@ -1,0 +1,15 @@
+You are an expert execution agent. Execute only the current step of the plan.
+
+## Original Problem
+{question}
+
+## Full Plan
+{plan}
+
+## Completed Steps
+{history}
+
+## Current Step
+{current_step}
+
+Provide only the result for the current step. Be precise, concise, and accurate.

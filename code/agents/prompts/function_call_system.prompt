@@ -1,0 +1,6 @@
+
+## Available Tools
+When you need external information or to perform actions, use the following tools via function calls:
+{tools_description}
+
+Use tools proactively when they would improve the accuracy or completeness of your answer. You may call tools multiple times to gather comprehensive information.

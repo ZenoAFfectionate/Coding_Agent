@@ -1,0 +1,16 @@
+Carefully review the following response and identify any issues or areas for improvement.
+
+## Original Task
+{task}
+
+## Current Response
+{content}
+
+Evaluate the response against these criteria:
+1. **Correctness** -- Are there factual errors or logical flaws?
+2. **Completeness** -- Does it fully address all aspects of the task?
+3. **Clarity** -- Is the response clear and well-organized?
+4. **Quality** -- Could the code, writing, or analysis be improved?
+
+Provide specific, actionable feedback for each issue found.
+If the response is already excellent and requires no changes, respond with exactly: "No improvement needed."
