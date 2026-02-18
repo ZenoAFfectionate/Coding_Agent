@@ -24,13 +24,13 @@ HelloAgents 智能体评估模块
 """
 
 # 导出benchmark评估器和数据集
-from hello_agents.evaluation.benchmarks.bfcl.dataset import BFCLDataset
-from hello_agents.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
-from hello_agents.evaluation.benchmarks.gaia.dataset import GAIADataset
-from hello_agents.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
-from hello_agents.evaluation.benchmarks.data_generation.dataset import AIDataset
-from hello_agents.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
-from hello_agents.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
+from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
+from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
+from code.evaluation.benchmarks.gaia.dataset import GAIADataset
+from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
+from code.evaluation.benchmarks.data_generation.dataset import AIDataset
+from code.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
+from code.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
 
 __version__ = "0.1.0"
 

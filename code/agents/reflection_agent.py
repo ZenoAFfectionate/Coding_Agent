@@ -20,13 +20,15 @@ def _load_default_prompts() -> Dict[str, str]:
 class Memory:
     """Short-term memory for tracking execution attempts and reflections."""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         self.records: List[Dict[str, Any]] = []
+        self.debug = debug
 
     def add_record(self, record_type: str, content: str):
         """Add a new record to memory."""
         self.records.append({"type": record_type, "content": content})
-        print(f"  Memory updated: new '{record_type}' record added.")
+        if self.debug:
+            print(f"  Memory updated: new '{record_type}' record added.")
 
     def get_trajectory(self) -> str:
         """Format all memory records into a coherent trajectory string."""
@@ -59,6 +61,20 @@ class ReflectionAgent(Agent):
     and other tasks that benefit from iterative refinement.
     """
 
+    # Patterns in reflection feedback indicating no further refinement is needed
+    _STOP_PATTERNS = [
+        "no improvement needed",
+        "no further improvement",
+        "no changes needed",
+        "no changes required",
+        "no modifications needed",
+        "no significant issues",
+        "the code is correct",
+        "the solution is correct",
+        "no bugs found",
+        "no errors found",
+    ]
+
     def __init__(
         self,
         name: str,
@@ -80,7 +96,7 @@ class ReflectionAgent(Agent):
         """
         super().__init__(name, llm, system_prompt, config)
         self.max_iterations = max_iterations
-        self.memory = Memory()
+        self.memory = Memory(debug=self.config.debug)
 
         # Custom prompts take priority; otherwise load from prompt files
         self.prompts = custom_prompts if custom_prompts else _load_default_prompts()
@@ -95,23 +111,23 @@ class ReflectionAgent(Agent):
         Returns:
             The final refined result.
         """
-        print(f"\n[{self.name}] Starting task: {input_text}")
+        self._print(f"\n[{self.name}] Starting task: {input_text}", level="info")
 
         # Reset memory
-        self.memory = Memory()
+        self.memory = Memory(debug=self.config.debug)
 
         # 1. Initial execution
-        print("\n--- Initial attempt ---")
+        self._print("\n--- Initial attempt ---")
         initial_prompt = self.prompts["initial"].format(task=input_text)
         initial_result = self._get_llm_response(initial_prompt, **kwargs)
         self.memory.add_record("execution", initial_result)
 
         # 2. Iterative loop: reflect and refine
         for i in range(self.max_iterations):
-            print(f"\n--- Iteration {i+1}/{self.max_iterations} ---")
+            self._print(f"\n--- Iteration {i+1}/{self.max_iterations} ---")
 
             # a. Reflect
-            print("\n-> Reflecting...")
+            self._print("\n-> Reflecting...")
             last_result = self.memory.get_last_execution()
             reflect_prompt = self.prompts["reflect"].format(
                 task=input_text,
@@ -121,12 +137,12 @@ class ReflectionAgent(Agent):
             self.memory.add_record("reflection", feedback)
 
             # b. Check if refinement is needed
-            if "no improvement needed" in feedback.lower():
-                print("\n  Reflection indicates no further improvement needed. Done.")
+            if self._should_stop_refining(feedback):
+                self._print("\n  Reflection indicates no further improvement needed. Done.")
                 break
 
             # c. Refine
-            print("\n-> Refining...")
+            self._print("\n-> Refining...")
             refine_prompt = self.prompts["refine"].format(
                 task=input_text,
                 last_attempt=last_result,
@@ -136,13 +152,22 @@ class ReflectionAgent(Agent):
             self.memory.add_record("execution", refined_result)
 
         final_result = self.memory.get_last_execution()
-        print(f"\n--- Task complete ---\nFinal result:\n{final_result}")
+        self._print(f"\n--- Task complete ---\nFinal result:\n{final_result}", level="info")
 
         # Save to history
         self.add_message(Message(input_text, "user"))
         self.add_message(Message(final_result, "assistant"))
 
         return final_result
+
+    def _should_stop_refining(self, feedback: str) -> bool:
+        """Check if reflection feedback indicates no further refinement is needed.
+
+        Matches against multiple common phrasings rather than a single
+        hard-coded string, making the termination heuristic more robust.
+        """
+        feedback_lower = feedback.lower()
+        return any(pattern in feedback_lower for pattern in self._STOP_PATTERNS)
 
     def _get_llm_response(self, prompt: str, **kwargs) -> str:
         """Call LLM and return the full response."""

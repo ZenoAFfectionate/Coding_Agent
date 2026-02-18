@@ -64,7 +64,7 @@ class BFCLDataset:
 
     def __init__(
         self,
-        bfcl_data_dir: Union[str, Path] = "./temp_gorilla/berkeley-function-call-leaderboard/bfcl_eval/data",
+        bfcl_data_dir: Union[str, Path] = "data/BFCL",
         category: Optional[str] = None
     ):
         """初始化 BFCL 数据集加载器

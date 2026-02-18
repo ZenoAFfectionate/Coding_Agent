@@ -166,6 +166,9 @@ cython_debug/
 
 # Data files (large datasets)
 data/
+docs/
+example/
+.claude
 
 # Sandbox temp directories
 codingagent_sandbox_*/

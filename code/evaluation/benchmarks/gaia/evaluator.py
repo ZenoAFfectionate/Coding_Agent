@@ -9,8 +9,8 @@ import time
 import re
 import json
 from pathlib import Path
-from hello_agents.evaluation.benchmarks.gaia.dataset import GAIADataset
-from hello_agents.evaluation.benchmarks.gaia.metrics import GAIAMetrics
+from code.evaluation.benchmarks.gaia.dataset import GAIADataset
+from code.evaluation.benchmarks.gaia.metrics import GAIAMetrics
 
 
 class GAIAEvaluator:

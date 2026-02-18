@@ -331,12 +331,25 @@ class ContextBuilder:
         return "\n".join(compressed_lines)
 
 
+# Module-level cached tiktoken encoding (created once on first use)
+_TIKTOKEN_ENC = None
+
+
+def _get_tiktoken_enc():
+    """Return the cached tiktoken encoding, creating it on first call."""
+    global _TIKTOKEN_ENC
+    if _TIKTOKEN_ENC is None:
+        try:
+            _TIKTOKEN_ENC = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            pass
+    return _TIKTOKEN_ENC
+
+
 def count_tokens(text: str) -> int:
-    """count token in text using tiktoken"""
-    try:
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
-    except Exception:
-        # rough estimation: 4 chars per token
-        return len(text) // 4
+    """count token in text using tiktoken (cached encoder)"""
+    enc = _get_tiktoken_enc()
+    if enc is not None:
+        return len(enc.encode(text))
+    return len(text) // 4
 

@@ -10,8 +10,8 @@ import ast
 import re
 import time
 from pathlib import Path
-from hello_agents.evaluation.benchmarks.bfcl.dataset import BFCLDataset
-from hello_agents.evaluation.benchmarks.bfcl.metrics import BFCLMetrics
+from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
+from code.evaluation.benchmarks.bfcl.metrics import BFCLMetrics
 
 
 class BFCLEvaluator:

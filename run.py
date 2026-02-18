@@ -10,16 +10,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# ---------------------------------------------------------------------------
-# Bootstrap: ensure the project root is on sys.path so ``code.*`` imports work
-# even when running ``python run.py`` directly.
-# ---------------------------------------------------------------------------
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 load_dotenv(PROJECT_ROOT / ".env")
 
 from code.core.llm import HelloAgentsLLM
+from code.core.config import Config
 from code.agents.react_agent import ReActAgent
 from code.tools.registry import ToolRegistry
 from code.tools.builtin.file_tool import FileTool
@@ -107,22 +104,37 @@ class PromptManager:
 
 def build_agent(
     workspace: str = ".",
-    max_iterations: int = 15,
+    max_iterations: int = 32,
     temperature: float = 0.2,
+    debug: bool = True,
 ) -> ReActAgent:
     """Create a fully-equipped Python Coding Agent.
+
+    LLM parameters (model, provider, temperature, max_tokens) are read from
+    Config.  The ``temperature`` argument overrides the Config default so
+    that CLI callers can still set it directly.
 
     Args:
         workspace: Root directory the agent operates in.
         max_iterations: Max tool-calling rounds per query.
         temperature: LLM sampling temperature (low = deterministic).
+        debug: If True, agent prints step-by-step reasoning.
 
     Returns:
         A ready-to-use ReActAgent.
     """
     workspace = str(Path(workspace).resolve())
 
-    llm = HelloAgentsLLM(temperature=temperature)
+    # --- Config (single source of truth) ---
+    config = Config(debug=debug, temperature=temperature)
+
+    # --- LLM (reads model/provider/temperature/max_tokens from Config) ---
+    llm = HelloAgentsLLM(
+        model=config.default_model,
+        provider=config.default_provider,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+    )
 
     # --- Tools ---
     registry = ToolRegistry()
@@ -145,6 +157,7 @@ def build_agent(
         system_prompt=system_prompt,
         tool_registry=registry,
         max_steps=max_iterations,
+        config=config,
     )
 
     return agent
@@ -156,12 +169,12 @@ def build_agent(
 
 HELP_TEXT = """\
 Commands:
-  /review <path>         Structured code review
-  /test <path>           Generate tests for a module
-  /optimize <path>       Profile and optimize code
-  /debug <description>   Systematic debugging
   /help                  Show this help
   quit / exit / q        Exit the agent
+
+Just describe what you need in natural language. The agent will
+automatically determine the appropriate approach (review, test,
+optimize, debug, etc.).
 
 Tip: Multi-line paste is auto-detected. You can also use:
   python run.py --task "$(cat problem.txt)"
@@ -215,8 +228,7 @@ def _read_user_input() -> str:
 
 
 def repl(agent: ReActAgent, sandbox_dir: str = None) -> None:
-    """Run an interactive read-eval-print loop with slash-command support."""
-    prompt_manager = PromptManager(PROMPTS_DIR)
+    """Run an interactive read-eval-print loop."""
 
     print("=" * 60)
     print("  Python Coding Agent")
@@ -230,7 +242,7 @@ def repl(agent: ReActAgent, sandbox_dir: str = None) -> None:
         print(f"  Workspace: {agent.tool_registry.get_tool('file').workspace}")
         print(f"  Mode    : direct (operating on real files)")
     print("=" * 60)
-    print("Type your request, use /commands, or 'quit' to stop.")
+    print("Type your request or 'quit' to stop.")
     print("Type /help to see available commands.\n")
 
     while True:
@@ -246,27 +258,12 @@ def repl(agent: ReActAgent, sandbox_dir: str = None) -> None:
             print("Goodbye.")
             break
 
-        # --- Slash commands ---
-        if user_input.startswith("/"):
-            parts = user_input[1:].split(None, 1)
-            command = parts[0].lower() if parts else ""
-            args = parts[1] if len(parts) > 1 else ""
+        # --- /help command ---
+        if user_input.strip().lower() == "/help":
+            print(HELP_TEXT)
+            continue
 
-            if command == "help":
-                print(HELP_TEXT)
-                continue
-
-            if command in PromptManager.TASK_PROMPTS:
-                if not args:
-                    print(f"Usage: /{command} <path or description>")
-                    continue
-                message = prompt_manager.build_task_message(command, args)
-                print(f"[{command}] Processing: {args}")
-            else:
-                print(f"Unknown command: /{command}. Type /help for options.")
-                continue
-        else:
-            message = user_input
+        message = user_input
 
         # --- Run agent ---
         try:
@@ -278,11 +275,16 @@ def repl(agent: ReActAgent, sandbox_dir: str = None) -> None:
             print(f"\n[Error] {e}\n")
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+def _cleanup_sandbox(sandbox_dir: str) -> None:
+    """Remove the temporary sandbox directory."""
+    try:
+        shutil.rmtree(sandbox_dir)
+        print(f"\n[Sandbox] Cleaned up temporary workspace: {sandbox_dir}")
+    except Exception as e:
+        print(f"\n[Sandbox] Warning: failed to clean up {sandbox_dir}: {e}")
 
-def parse_args() -> argparse.Namespace:
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Python Coding Agent — an AI-powered software engineering assistant."
     )
@@ -314,11 +316,7 @@ def parse_args() -> argparse.Namespace:
         default=0.2,
         help="LLM sampling temperature (default: 0.2).",
     )
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
+    args = parser.parse_args()
 
     # Determine workspace: sandbox (default) or user-specified directory
     sandbox_dir = None
@@ -347,16 +345,3 @@ def main() -> None:
     else:
         # Interactive REPL
         repl(agent, sandbox_dir=sandbox_dir)
-
-
-def _cleanup_sandbox(sandbox_dir: str) -> None:
-    """Remove the temporary sandbox directory."""
-    try:
-        shutil.rmtree(sandbox_dir)
-        print(f"\n[Sandbox] Cleaned up temporary workspace: {sandbox_dir}")
-    except Exception as e:
-        print(f"\n[Sandbox] Warning: failed to clean up {sandbox_dir}: {e}")
-
-
-if __name__ == "__main__":
-    main()

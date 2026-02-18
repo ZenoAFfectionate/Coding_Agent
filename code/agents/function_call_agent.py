@@ -303,18 +303,45 @@ class FunctionCallAgent(Agent):
                     )
                 messages.append(assistant_payload)
 
-                for tool_call in tool_calls:
-                    tool_name = tool_call.function.name
-                    arguments = self._parse_function_call_arguments(tool_call.function.arguments)
-                    result = self._execute_tool_call(tool_name, arguments)
+                if len(tool_calls) == 1:
+                    # Single call: no threading overhead
+                    tc = tool_calls[0]
+                    arguments = self._parse_function_call_arguments(tc.function.arguments)
+                    result = self._execute_tool_call(tc.function.name, arguments)
                     messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_name,
+                            "tool_call_id": tc.id,
+                            "name": tc.function.name,
                             "content": result,
                         }
                     )
+                else:
+                    # Multiple calls: execute in parallel
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                    def _exec(tc):
+                        args = self._parse_function_call_arguments(tc.function.arguments)
+                        return tc.id, tc.function.name, self._execute_tool_call(tc.function.name, args)
+
+                    with ThreadPoolExecutor(max_workers=min(len(tool_calls), 4)) as pool:
+                        futures = [pool.submit(_exec, tc) for tc in tool_calls]
+                        results = {}
+                        for f in as_completed(futures):
+                            call_id, name, result = f.result()
+                            results[call_id] = (name, result)
+
+                    # Append in original order to maintain tool_call_id correspondence
+                    for tc in tool_calls:
+                        name, result = results[tc.id]
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "name": name,
+                                "content": result,
+                            }
+                        )
 
                 current_iteration += 1
                 continue

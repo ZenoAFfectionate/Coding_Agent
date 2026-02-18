@@ -84,6 +84,7 @@ class HelloAgentsLLM:
 
         # 创建OpenAI客户端
         self._client = self._create_client()
+        self._async_client = None  # Lazily created on first ainvoke() call
 
     def _auto_detect_provider(self, api_key: Optional[str], base_url: Optional[str]) -> str:
         """
@@ -349,23 +350,23 @@ class HelloAgentsLLM:
     async def ainvoke(self, messages: list[dict[str, str]], **kwargs) -> str:
         """
         异步非流式调用LLM，返回完整响应。
-        Uses openai.AsyncOpenAI under the hood.
+        Uses openai.AsyncOpenAI under the hood (cached after first call).
         """
-        try:
-            from openai import AsyncOpenAI
-        except ImportError:
-            # Fallback: run sync invoke in executor
-            import asyncio
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, lambda: self.invoke(messages, **kwargs))
+        if self._async_client is None:
+            try:
+                from openai import AsyncOpenAI
+                self._async_client = AsyncOpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url,
+                    timeout=self.timeout,
+                )
+            except ImportError:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(None, lambda: self.invoke(messages, **kwargs))
 
         try:
-            async_client = AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url,
-                timeout=self.timeout,
-            )
-            response = await async_client.chat.completions.create(
+            response = await self._async_client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=kwargs.get('temperature', self.temperature),

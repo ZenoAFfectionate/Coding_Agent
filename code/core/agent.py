@@ -57,10 +57,18 @@ class Agent(ABC):
         self.trajectory = TrajectoryTracker(agent_name=name) if enable_trajectory else None
 
         # Structured logging
-        self.logger = AgentLogger(name, log_file=log_file) if enable_logging else None
+        self.logger = AgentLogger(name, level=self.config.log_level, log_file=log_file) if enable_logging else None
 
         # Context budget (token management)
         self.context_max_tokens = context_max_tokens
+
+        # Cached tiktoken encoder for token counting
+        self._tiktoken_enc = None
+        try:
+            import tiktoken
+            self._tiktoken_enc = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            pass
 
     @abstractmethod
     def run(self, input_text: str, **kwargs) -> str:
@@ -117,13 +125,10 @@ class Agent(ABC):
     # ------------------------------------------------------------------ #
 
     def _count_tokens(self, text: str) -> int:
-        """Estimate token count for a text string."""
-        try:
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            return len(enc.encode(text))
-        except Exception:
-            return len(text) // 4
+        """Estimate token count for a text string (cached encoder)."""
+        if self._tiktoken_enc is not None:
+            return len(self._tiktoken_enc.encode(text))
+        return len(text) // 4
 
     def _manage_context_budget(self, messages: list[dict]) -> list[dict]:
         """Trim messages to fit within context_max_tokens budget.
@@ -184,12 +189,33 @@ class Agent(ABC):
 
 
     # ------------------------------------------------------------------ #
+    #  Debug-aware printing
+    # ------------------------------------------------------------------ #
+
+    def _print(self, msg: str, level: str = "debug") -> None:
+        """Print a message, respecting the config.debug flag.
+
+        Args:
+            msg: The message to print.
+            level: "debug" only prints when self.config.debug is True;
+                   "info" always prints (errors, warnings, final results).
+        """
+        if level == "info" or self.config.debug:
+            print(msg)
+
+    # ------------------------------------------------------------------ #
     #  History management
     # ------------------------------------------------------------------ #
 
     def add_message(self, message: Message):
-        """Add a message to conversation history."""
+        """Add a message to conversation history.
+
+        Enforces config.max_history_length by trimming the oldest messages.
+        """
         self._history.append(message)
+        max_len = self.config.max_history_length
+        if max_len > 0 and len(self._history) > max_len:
+            self._history = self._history[-max_len:]
 
     def clear_history(self):
         """Clear conversation history."""

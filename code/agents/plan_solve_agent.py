@@ -1,6 +1,7 @@
 """Plan and Solve Agent -- decompose-then-execute agent."""
 
 import ast
+import re
 from typing import Optional, List, Dict
 from ..core.agent import Agent
 from ..core.llm import HelloAgentsLLM
@@ -12,9 +13,10 @@ from .prompts import load_agent_prompt
 class Planner:
     """Planner -- decomposes a complex problem into simple steps."""
 
-    def __init__(self, llm_client: HelloAgentsLLM, prompt_template: Optional[str] = None):
+    def __init__(self, llm_client: HelloAgentsLLM, prompt_template: Optional[str] = None, debug: bool = False):
         self.llm_client = llm_client
         self.prompt_template = prompt_template or load_agent_prompt("planner")
+        self.debug = debug
 
     def plan(self, question: str, **kwargs) -> List[str]:
         """Generate an execution plan.
@@ -29,30 +31,45 @@ class Planner:
         prompt = self.prompt_template.format(question=question)
         messages = [{"role": "user", "content": prompt}]
 
-        print("--- Generating plan ---")
+        if self.debug:
+            print("--- Generating plan ---")
         response_text = self.llm_client.invoke(messages, **kwargs) or ""
-        print(f"  Plan generated:\n{response_text}")
+        if self.debug:
+            print(f"  Plan generated:\n{response_text}")
 
+        # Strategy 1: Extract a Python list from a ```python code block
         try:
-            # Extract the Python list from the code block
             plan_str = response_text.split("```python")[1].split("```")[0].strip()
             plan = ast.literal_eval(plan_str)
-            return plan if isinstance(plan, list) else []
-        except (ValueError, SyntaxError, IndexError) as e:
-            print(f"  Error: failed to parse plan: {e}")
-            print(f"  Raw response: {response_text}")
-            return []
-        except Exception as e:
-            print(f"  Error: unexpected error while parsing plan: {e}")
-            return []
+            if isinstance(plan, list) and plan:
+                return plan
+        except (ValueError, SyntaxError, IndexError):
+            pass
+
+        # Strategy 2: Try JSON parsing (handles ```json blocks and bare JSON)
+        from ..core.output_parser import OutputParser
+        parsed = OutputParser.parse_json(response_text)
+        if isinstance(parsed, list) and parsed:
+            return [str(item) for item in parsed]
+
+        # Strategy 3: Extract numbered list from plain text (e.g. "1. Do X\n2. Do Y")
+        steps = re.findall(r'(?:^|\n)\s*\d+[\.\)]\s*(.+)', response_text)
+        if steps:
+            return [s.strip() for s in steps if s.strip()]
+
+        if self.debug:
+            print(f"  Error: failed to parse plan from response")
+            print(f"  Raw response: {response_text[:500]}")
+        return []
 
 
 class Executor:
     """Executor -- executes the plan step by step."""
 
-    def __init__(self, llm_client: HelloAgentsLLM, prompt_template: Optional[str] = None):
+    def __init__(self, llm_client: HelloAgentsLLM, prompt_template: Optional[str] = None, debug: bool = False):
         self.llm_client = llm_client
         self.prompt_template = prompt_template or load_agent_prompt("executor")
+        self.debug = debug
 
     def execute(self, question: str, plan: List[str], **kwargs) -> str:
         """Execute the plan.
@@ -68,9 +85,11 @@ class Executor:
         history = ""
         final_answer = ""
 
-        print("\n--- Executing plan ---")
+        if self.debug:
+            print("\n--- Executing plan ---")
         for i, step in enumerate(plan, 1):
-            print(f"\n-> Executing step {i}/{len(plan)}: {step}")
+            if self.debug:
+                print(f"\n-> Executing step {i}/{len(plan)}: {step}")
             prompt = self.prompt_template.format(
                 question=question,
                 plan=plan,
@@ -83,7 +102,8 @@ class Executor:
 
             history += f"Step {i}: {step}\nResult: {response_text}\n\n"
             final_answer = response_text
-            print(f"  Step {i} complete. Result: {final_answer}")
+            if self.debug:
+                print(f"  Step {i} complete. Result: {final_answer}")
 
         return final_answer
 
@@ -127,8 +147,8 @@ class PlanAndSolveAgent(Agent):
             planner_prompt = None
             executor_prompt = None
 
-        self.planner = Planner(self.llm, planner_prompt)
-        self.executor = Executor(self.llm, executor_prompt)
+        self.planner = Planner(self.llm, planner_prompt, debug=self.config.debug)
+        self.executor = Executor(self.llm, executor_prompt, debug=self.config.debug)
 
     def run(self, input_text: str, **kwargs) -> str:
         """Run the Plan and Solve Agent.
@@ -140,13 +160,13 @@ class PlanAndSolveAgent(Agent):
         Returns:
             The final answer.
         """
-        print(f"\n[{self.name}] Starting problem: {input_text}")
+        self._print(f"\n[{self.name}] Starting problem: {input_text}", level="info")
 
         # 1. Generate plan
         plan = self.planner.plan(input_text, **kwargs)
         if not plan:
             final_answer = "Failed to generate a valid plan. Task aborted."
-            print(f"\n--- Task aborted ---\n{final_answer}")
+            self._print(f"\n--- Task aborted ---\n{final_answer}", level="info")
 
             self.add_message(Message(input_text, "user"))
             self.add_message(Message(final_answer, "assistant"))
@@ -155,7 +175,7 @@ class PlanAndSolveAgent(Agent):
 
         # 2. Execute plan
         final_answer = self.executor.execute(input_text, plan, **kwargs)
-        print(f"\n--- Task complete ---\nFinal answer: {final_answer}")
+        self._print(f"\n--- Task complete ---\nFinal answer: {final_answer}", level="info")
 
         # Save to history
         self.add_message(Message(input_text, "user"))

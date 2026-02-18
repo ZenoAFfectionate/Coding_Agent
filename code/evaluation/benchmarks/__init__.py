@@ -7,10 +7,10 @@ Benchmarks 模块
 - Data Generation: 数据生成质量评估
 """
 
-from hello_agents.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
-from hello_agents.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
-from hello_agents.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
-from hello_agents.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
+from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
+from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
+from code.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
+from code.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
 
 __all__ = [
     "BFCLEvaluator",

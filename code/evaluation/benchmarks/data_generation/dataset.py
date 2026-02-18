@@ -64,14 +64,26 @@ class AIDataset:
         """加载生成的数据"""
         if not self.data_path:
             raise ValueError("data_path is required for generated dataset")
-        
+
         if not os.path.exists(self.data_path):
             raise FileNotFoundError(f"Data file not found: {self.data_path}")
-        
+
         print(f"📥 加载生成数据: {self.data_path}")
-        
+
         with open(self.data_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+            first_char = f.read(1)
+            f.seek(0)
+
+            if first_char == '[':
+                # Standard JSON array
+                data = json.load(f)
+            else:
+                # JSONL format (one JSON object per line)
+                data = []
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        data.append(json.loads(line))
         
         # 统一数据格式
         problems = []
@@ -100,25 +112,40 @@ class AIDataset:
         try:
             # 使用AIME 2025数据集
             repo_id = "math-ai/aime25"
-            use_datasets_lib = False  # 使用snapshot_download（JSONL格式）
 
             print(f"   使用数据集: {repo_id}")
 
-            # 使用snapshot_download下载文件
-            local_dir = snapshot_download(
-                repo_id=repo_id,
-                repo_type="dataset",
-                cache_dir=self.cache_dir
-            )
+            # Check common local paths before downloading
+            local_candidates = [
+                Path(f"data/AIME/test.jsonl"),
+                Path(f"data/aime25/test.jsonl"),
+                Path(f"data/aime/test.jsonl"),
+            ]
 
-            # 查找JSONL数据文件
-            data_files = list(Path(local_dir).glob("*.jsonl"))
+            local_dir = None
+            data_file = None
+            for candidate in local_candidates:
+                if candidate.exists():
+                    data_file = candidate
+                    print(f"   ✓ 使用本地数据文件: {data_file}")
+                    break
 
-            if not data_files:
-                raise FileNotFoundError(f"No JSONL data file found in {repo_id}")
+            if data_file is None:
+                # 使用snapshot_download下载文件
+                local_dir = snapshot_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    cache_dir=self.cache_dir
+                )
 
-            data_file = data_files[0]
-            print(f"   ✓ 找到数据文件: {data_file.name}")
+                # 查找JSONL数据文件
+                data_files = list(Path(local_dir).glob("*.jsonl"))
+
+                if not data_files:
+                    raise FileNotFoundError(f"No JSONL data file found in {repo_id}")
+
+                data_file = data_files[0]
+                print(f"   ✓ 找到数据文件: {data_file.name}")
 
             # 加载JSONL数据
             data = []
