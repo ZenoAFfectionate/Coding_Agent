@@ -167,6 +167,7 @@ cython_debug/
 # Data files (large datasets)
 data/
 docs/
+tests/
 example/
 .claude
 

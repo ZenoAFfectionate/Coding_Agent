@@ -1,1 +1,0 @@
-"""CodingAgent test suite."""
