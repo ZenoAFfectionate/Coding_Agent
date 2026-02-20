@@ -37,6 +37,7 @@ import subprocess
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -116,7 +117,7 @@ class GitTool(Tool):
                     return f"Blocked: '{cmd_str}' is a destructive operation. Set allow_destructive=True to permit it."
 
         try:
-            result = subprocess.run(
+            result = safe_run(
                 cmd,
                 cwd=str(self.repo_path),
                 capture_output=True,

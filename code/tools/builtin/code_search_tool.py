@@ -20,6 +20,7 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -151,7 +152,7 @@ class CodeSearchTool(Tool):
         args.append(str(path))
 
         try:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=self.timeout,
+            result = safe_run(args, capture_output=True, text=True, timeout=self.timeout,
                                     cwd=str(self.workspace))
             output = result.stdout
             if not output.strip():
@@ -173,7 +174,7 @@ class CodeSearchTool(Tool):
         args.append(str(path))
 
         try:
-            result = subprocess.run(args, capture_output=True, text=True, timeout=self.timeout,
+            result = safe_run(args, capture_output=True, text=True, timeout=self.timeout,
                                     cwd=str(self.workspace))
             output = result.stdout
             if not output.strip():

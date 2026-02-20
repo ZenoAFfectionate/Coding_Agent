@@ -27,6 +27,7 @@ from pathlib import Path
 import shlex
 import platform
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter
 
 
@@ -214,7 +215,7 @@ class TerminalTool(Tool):
             # 根据操作系统类型调整命令执行方式
             if self.os_type == "windows":
                 # Windows下使用cmd.exe或直接shell=True
-                result = subprocess.run(
+                result = safe_run(
                     command,
                     shell=True,
                     cwd=str(self.current_dir),
@@ -225,7 +226,7 @@ class TerminalTool(Tool):
                 )
             else:
                 # Unix系统（Linux/Mac）使用shell=True
-                result = subprocess.run(
+                result = safe_run(
                     command,
                     shell=True,
                     cwd=str(self.current_dir),

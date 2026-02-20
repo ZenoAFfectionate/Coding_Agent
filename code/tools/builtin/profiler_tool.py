@@ -21,6 +21,7 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -88,7 +89,7 @@ class ProfilerTool(Tool):
                 f.write(code)
                 tmp_path = f.name
 
-            result = subprocess.run(
+            result = safe_run(
                 [self.python_executable, tmp_path],
                 cwd=str(self.workspace),
                 capture_output=True,

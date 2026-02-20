@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Union
 import os
 
+from ....utils.subprocess_utils import safe_run
+
 
 class BFCLIntegration:
     """BFCL官方评估工具集成类
@@ -58,7 +60,7 @@ class BFCLIntegration:
             True如果已安装，False否则
         """
         try:
-            result = subprocess.run(
+            result = safe_run(
                 ["bfcl", "--version"],
                 capture_output=True,
                 text=True,
@@ -78,7 +80,7 @@ class BFCLIntegration:
         print("   运行: pip install bfcl-eval")
         
         try:
-            result = subprocess.run(
+            result = safe_run(
                 ["pip", "install", "bfcl-eval"],
                 capture_output=True,
                 text=True,
@@ -178,7 +180,7 @@ class BFCLIntegration:
         print(f"   命令: {' '.join(cmd)}")
         
         try:
-            result = subprocess.run(
+            result = safe_run(
                 cmd,
                 capture_output=True,
                 text=True,

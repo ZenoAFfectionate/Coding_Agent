@@ -14,7 +14,7 @@ def run_bfcl(args):
     """Run BFCL (Berkeley Function Calling Leaderboard) evaluation."""
     from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
     from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
-    from run import build_agent
+    from inference import build_agent
 
     agent = build_agent(
         workspace=args.workspace,
@@ -50,7 +50,7 @@ def run_gaia(args):
     """Run GAIA (General AI Assistants) evaluation."""
     from code.evaluation.benchmarks.gaia.dataset import GAIADataset
     from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
-    from run import build_agent
+    from inference import build_agent
 
     agent = build_agent(
         workspace=args.workspace,

@@ -198,7 +198,7 @@ class AgentLogger:
     def step(self, step_type: str, content: str, step_num: int = 0):
         """Log an agent step."""
         data = {"step_type": step_type, "step_num": step_num, "content_preview": content[:200]}
-        self._log_event(logging.DEBUG, "agent_step",
+        self._log_event(logging.INFO, "agent_step",
                         f"Step {step_num}: [{step_type}] {content[:100]}", data)
 
     def info(self, message: str, **data):

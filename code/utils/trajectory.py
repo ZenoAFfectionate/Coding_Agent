@@ -275,8 +275,12 @@ class TrajectoryTracker:
                 header += f"  ({step.duration_ms:.0f}ms)"
             lines.append(header)
             lines.append(f"  {step.content}")
+            # Metadata is preserved in JSON exports; only show non-redundant
+            # keys in the text view to keep output concise.
             if step.metadata:
-                for k, v in step.metadata.items():
+                shown = {k: v for k, v in step.metadata.items()
+                         if k not in ("step", "tool")}
+                for k, v in shown.items():
                     lines.append(f"    {k}: {v}")
 
         # Statistics footer

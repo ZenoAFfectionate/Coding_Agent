@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -97,7 +98,7 @@ class CodeExecutionTool(Tool):
         """Execute Python code.
 
         Args:
-            parameters: Dict with code, timeout.
+            parameters: Dict with code and optional timeout.
         Returns:
             Structured execution result.
         """
@@ -116,7 +117,7 @@ class CodeExecutionTool(Tool):
                 f.write(code)
                 tmp_path = f.name
 
-            result = subprocess.run(
+            result = safe_run(
                 [self.python_executable, tmp_path],
                 cwd=str(self.workspace),
                 capture_output=True,
@@ -171,7 +172,7 @@ class CodeExecutionTool(Tool):
         timeout = parameters.get("timeout", self.timeout) or self.timeout
 
         try:
-            result = subprocess.run(
+            result = safe_run(
                 command,
                 shell=True,
                 cwd=str(self.workspace),

@@ -6,11 +6,16 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![OpenAI Compatible](https://img.shields.io/badge/OpenAI-Compatible-green.svg)](https://platform.openai.com/docs/api-reference)
 
-This project implements a **Python Coding Agent** on top of the HelloAgents multi-agent framework. The agent can read, write, search, execute, test, lint, and profile Python code autonomously — functioning as an AI-powered software engineering assistant.
+This project implements a **Python Coding Agent** on top of the HelloAgents multi-agent framework. It supports both **single-agent** and **multi-agent** modes. The agent can read, write, search, execute, test, lint, and profile Python code autonomously — functioning as an AI-powered software engineering assistant.
 
 ## Overview
 
 The Coding Agent extends HelloAgents' tool-based architecture with a comprehensive set of software engineering tools. Following HelloAgents' design philosophy of "everything is a tool", each capability — from file I/O to Git operations to performance profiling — is encapsulated as a `Tool` subclass that the agent invokes through function calling.
+
+The project provides two execution modes:
+
+- **Single-agent mode** (`inference.py`): A ReActAgent equipped with all coding tools, supporting interactive REPL and batch inference.
+- **Multi-agent mode** (`run_multi.py`): An orchestrator agent that delegates to specialized worker agents (review, test, optimize, debug), each with a curated subset of tools.
 
 ### Core Capabilities
 
@@ -30,12 +35,280 @@ The Coding Agent extends HelloAgents' tool-based architecture with a comprehensi
 
 ### Agent Paradigms
 
-The project inherits all agent paradigms from HelloAgents:
+The project inherits all agent paradigms from HelloAgents, plus new additions:
 
+- **ReActAgent** — Reasoning + Acting loop with structured self-debugging and reflection
 - **FunctionCallAgent** — OpenAI-native function calling with parallel tool dispatch
-- **ReActAgent** — Reasoning + Acting loop with structured self-debugging
 - **ReflectionAgent** — Self-critique and iterative refinement
 - **PlanAndSolveAgent** — Decompose complex problems into steps
+- **SimpleAgent** — Lightweight conversational agent with optional tool calling
+- **ToolAwareSimpleAgent** — SimpleAgent with tool call monitoring and logging
+- **OrchestratorAgent** — Multi-agent master that delegates to specialized workers
+
+---
+
+## Quick Start
+
+### Requirements
+
+- Python 3.12+
+- An OpenAI-compatible LLM endpoint (local or remote)
+
+### Installation
+
+```bash
+git clone <this-repo>
+cd CodingAgent
+pip install -e .[all]
+```
+
+### Environment Configuration
+
+Create a `.env` file:
+
+```bash
+LLM_MODEL_ID=your-model-name
+LLM_API_KEY=your-api-key
+LLM_BASE_URL=your-api-base-url
+```
+
+For local model deployment (e.g., with vLLM):
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 \
+    --tensor-parallel-size 2 \
+    --port 8000 \
+    --gpu-memory-utilization 0.9 \
+    --trust-remote-code \
+    --enable-auto-tool-choice \
+    --tool-call-parser hermes
+```
+
+### Running the Agent
+
+**Single-agent — Interactive REPL (sandbox mode):**
+
+```bash
+python inference.py
+```
+
+**Single-agent — Interactive REPL (on a real project):**
+
+```bash
+python inference.py --workspace ./my_project
+```
+
+**Single-agent — Batch mode:**
+
+```bash
+python inference.py --batch --input data/xCode/valid.jsonl --output data/xCode/result.jsonl
+```
+
+**Multi-agent — Interactive REPL (sandbox mode):**
+
+```bash
+python run_multi.py
+```
+
+**Multi-agent — Single-shot mode:**
+
+```bash
+python run_multi.py --task "Review and optimize my_project/main.py" --workspace ./my_project
+```
+
+### Programmatic Usage
+
+```python
+from code.agents.react_agent import ReActAgent
+from code.core.llm import HelloAgentsLLM
+from code.core.config import Config
+from code.tools.registry import ToolRegistry
+from code.tools.builtin.file_tool import FileTool
+from code.tools.builtin.code_execution_tool import CodeExecutionTool
+from code.tools.builtin.linter_tool import LinterTool
+from code.tools.builtin.profiler_tool import ProfilerTool
+
+llm = HelloAgentsLLM()
+config = Config()
+
+# Register coding tools
+registry = ToolRegistry()
+registry.register_tool(FileTool(workspace="./my_project"))
+registry.register_tool(CodeExecutionTool(workspace="./my_project"))
+registry.register_tool(LinterTool(workspace="./my_project"))
+registry.register_tool(ProfilerTool(workspace="./my_project"))
+
+# Create the coding agent
+agent = ReActAgent(
+    name="CodingAgent",
+    llm=llm,
+    system_prompt="You are a Python coding assistant with access to file, execution, linting, and profiling tools.",
+    tool_registry=registry,
+    max_steps=15,
+    config=config,
+)
+
+response = agent.run("Read main.py and check it for lint errors")
+```
+
+---
+
+## Single-Agent Workflow Example
+
+This section illustrates the concrete execution flow when the single agent (`inference.py`) solves a coding problem. The trace below is based on actual agent output using `Qwen/Qwen3-30B-A3B-Thinking-2507`.
+
+### Execution Flow Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Initialization                          │
+│  1. Create sandbox directory (or use --workspace)           │
+│  2. Register tools: file, code_exec, code_search,           │
+│     test_runner, git, linter, profiler                      │
+│  3. Load system prompt & build ReActAgent                   │
+│  4. Start REPL (interactive) or batch loop                  │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   User Input (Query)                        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    ReAct Loop                               │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │  LLM Call  ──►  Thought  ──►  Action  ──►  Observe  │◄─┐│
+│  └────────────────────────────────────────────┬────────┘  ││
+│                                               │           ││
+│                                 ┌─────────────┴────┐      ││
+│                                 │  Error detected? │      ││
+│                                 └──┬───────────┬───┘      ││
+│                                  No│          Yes│         ││
+│                                    │   ┌────────▼───────┐  ││
+│                                    │   │  Debug Protocol │  ││
+│                                    │   │ (up to 3 tries) │  ││
+│                                    │   └────────┬───────┘  ││
+│                                    ▼            ▼          ││
+│                              ┌──────────────────────┐      ││
+│                              │  Finish[] or next    ├──────┘│
+│                              │  iteration           │       │
+│                              └──────────────────────┘       │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ Action: Finish[answer]
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      Reflection                             │
+│  Self-verify: APPROVED / NEEDS_REVISION (up to N retries)   │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Post-Processing                           │
+│  1. Print final answer                                      │
+│  2. Save trajectory to results/trajectories/                │
+│  3. Display generated code files (sandbox mode)             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Traced Example
+
+Below is an abbreviated trace of the agent solving a competitive programming problem (dynamic container cost calculation). The full trace is available in `output.txt`.
+
+**Step 1 — LLM Call (Reasoning):** The model receives the problem, reasons through the algorithm (understanding the push/pop/resize mechanics, deriving the O(n) simulation approach), and decides to write the solution to a file.
+
+```
+[Step 1]   LLM Call  (26944ms)
+  <think>
+  ... (model reasons about the problem, derives the algorithm,
+       traces through both examples to verify logic) ...
+
+  The condition for shrinking is: size * 4 <= capacity (avoids floating point).
+  The code should be O(n) — each operation is O(1).
+  </think>
+
+  Thought: I need to implement the cost calculation. I'll write the solution
+           to solution.py and verify with the provided examples.
+  Action: file[{"action": "write", "path": "solution.py", "content": "..."}]
+```
+
+**Steps 2–4 — Tool Execution (Write File):**
+
+```
+[Step 2]   Thought   — Parsed reasoning from LLM output
+[Step 3]   Action    — file[{"action": "write", "path": "solution.py", ...}]
+[Step 4]   Observation  (1ms)
+             Successfully wrote 437 bytes (21 lines) to solution.py
+```
+
+**Steps 5–8 — Test with Example 1:**
+
+```
+[Step 5]   LLM Call  (12338ms)
+  Thought: Verify the code against Example 1. Expected output: 6.
+  Action: code_exec[{"action": "shell", "code": "echo '...' | python solution.py"}]
+
+[Step 8]   Observation  (46ms)
+             Exit code: 0
+             stdout: 6                          ← ✓ Matches expected
+```
+
+**Steps 9–12 — Test with Example 2:**
+
+```
+[Step 9]   LLM Call  (8595ms)
+  Thought: Example 1 passed. Now verify Example 2. Expected output: 12.
+  Action: code_exec[{"action": "shell", "code": "echo '...' | python solution.py"}]
+
+[Step 12]  Observation  (31ms)
+             Exit code: 0
+             stdout: 12                         ← ✓ Matches expected
+```
+
+**Steps 13–16 — Conclude & Reflect:**
+
+```
+[Step 13]  LLM Call  (5621ms)
+  Thought: Both examples pass. The logic is correct. No changes needed.
+  Action: Finish[The solution correctly calculates the total cost ...]
+
+[Step 15]  Reflection
+             approved=True: The solution correctly handles the resizing
+             conditions and cost calculations.
+
+[Step 16]  Final Answer
+             The solution correctly calculates the total cost for the
+             container operations as verified by the provided examples.
+```
+
+**Post-Processing:**
+
+```
+============================================================
+ Summary: 16 steps | Duration: 72.47s
+============================================================
+[Trajectory] Saved to results/trajectories/single_agent_trajectory.json
+============================================================
+  Generated Code Files
+============================================================
+--- solution.py ---
+n = int(input().strip())
+size = 0
+capacity = 1
+total_cost = 0
+...
+============================================================
+```
+
+### Key Observations
+
+- **Reasoning-first:** The model spends the majority of time in the first LLM call (~27s), where it fully understands the problem and derives the algorithm before writing any code.
+- **Write-then-verify pattern:** The agent writes the complete solution in one shot, then tests it against the provided examples using shell execution.
+- **Self-verification:** Even after confirming both test cases pass, the agent goes through a reflection step that reviews whether the solution is complete and correct before finalizing.
+- **Minimal iteration:** For straightforward problems, the agent converges in a single write + test cycle (no debug loop triggered). The structured debug protocol activates only when tool observations contain errors.
+
+> **Note:** This trace covers the **single-agent** mode only. Multi-agent mode (orchestrator + specialized workers) follows a different delegation-based workflow and is not shown here.
 
 ---
 
@@ -177,123 +450,30 @@ Commands matching these patterns are blocked with a clear error message. This is
 
 - **Cached sklearn imports in `WorkingMemory`**: The `retrieve()` method previously imported `TfidfVectorizer`, `cosine_similarity`, and `numpy` inside a try/except on every retrieval call. Now uses a module-level `_HAS_SKLEARN` flag checked once at import time, avoiding repeated failed import attempts when sklearn is not installed.
 
-### 11. CLI & Entry Point
+### 11. CLI & Entry Points
 
-**File:** `run.py`
+**Files:** `inference.py`, `run_multi.py`
 
+**Single-agent mode (`inference.py`):**
+
+- **Two modes:** Interactive REPL (default) and batch (`--batch --input data.jsonl`).
 - **Sandbox mode by default**: When no `--workspace` is specified, the agent creates a temporary directory and registers an `atexit` cleanup handler. This prevents accidental writes to the user's filesystem.
 - **Direct workspace mode**: Use `--workspace ./my_project` to operate on real files.
-- **Single-shot mode**: `--task "..."` runs one query and exits, suitable for CI/scripting.
+- **Reflection / self-verification**: Enabled by default. Disable with `--no-reflection`, or configure retries with `--max-reflection-retries N`.
+- **Batch mode**: Processes JSONL problem sets, extracts generated code from sandbox, and produces result JSONL files.
 - **Multi-line paste detection**: The REPL uses `select()` to detect buffered stdin lines from paste operations.
-- **Prompt management**: `PromptManager` loads task-specific prompts from the `prompts/` directory.
+- **Prompt management**: Loads the system prompt from `prompts/system.prompt`.
+
+**Multi-agent mode (`run_multi.py`):**
+
+- **Orchestrator + Workers architecture**: The orchestrator dispatches tasks to specialized workers (review, test, optimize, debug), each with its own system prompt and curated tool set.
+- **Blackboard memory**: A shared `Blackboard` object accumulates findings and errors across workers, injected into the orchestrator's context.
+- **Dual communication mode**: Function calling (default) with automatic fallback to text-based JSON parsing for providers without function calling support.
+- **Result summarization**: LLM-based summarization of long worker results, with truncation fallback.
+- **Reflection on final answer**: The orchestrator self-critiques its synthesized answer before returning.
+- **CLI options**: `--max-worker-steps`, `--max-rounds`, `--max-result-chars`, `--context-max-tokens`, `--no-fc`, `--no-summarize`, `--no-reflect`.
 
 ---
-
-## Summary of Changes by File
-
-| File | Lines Changed | Key Optimization |
-|---|---|---|
-| `code/agents/react_agent.py` | +270 | Multi-turn messages, debug loop, output truncation, robust parsing |
-| `code/tools/builtin/code_search_tool.py` | +355 | AST-based structural code search |
-| `run.py` | +75 | Sandbox mode, single-shot mode, prompt management |
-| `code/agents/reflection_agent.py` | +30 | Robust stop detection, debug-aware output |
-| `code/agents/plan_solve_agent.py` | +35 | Multi-strategy plan parsing, debug-aware output |
-| `code/agents/function_call_agent.py` | +30 | Parallel tool execution |
-| `code/core/agent.py` | +30 | Cached tokenizer, debug printing, history limits, context budget |
-| `code/core/llm.py` | +10 | Cached async client |
-| `code/core/config.py` | +10 | Env-driven defaults, Pydantic v2 compat |
-| `code/context/builder.py` | +15 | Cached tiktoken encoding |
-| `code/memory/types/working.py` | +10 | Cached sklearn imports |
-| `code/tools/builtin/code_execution_tool.py` | +15 | Shell command blocklist |
-| `code/agents/prompts/debug.prompt` | New | Structured debug protocol template |
-| `code/agents/prompts/react.prompt` | +2 | Debug guidance mention in workflow |
-
----
-
-## Quick Start
-
-### Requirements
-
-- Python 3.12+
-- An OpenAI-compatible LLM endpoint (local or remote)
-
-### Installation
-
-```bash
-git clone <this-repo>
-cd CodingAgent
-pip install -e .[all]
-```
-
-### Environment Configuration
-
-Create a `.env` file:
-
-```bash
-LLM_MODEL_ID=your-model-name
-LLM_API_KEY=your-api-key
-LLM_BASE_URL=your-api-base-url
-```
-
-For local model deployment (e.g., with vLLM):
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 \
-    --tensor-parallel-size 2 \
-    --port 8000 \
-    --gpu-memory-utilization 0.95 \
-    --trust-remote-code \
-    --enable-auto-tool-choice \
-    --tool-call-parser hermes
-```
-
-### Running the Agent
-
-**Interactive REPL (sandbox mode):**
-
-```bash
-python run.py
-```
-
-**Interactive REPL (on a real project):**
-
-```bash
-python run.py --workspace ./my_project
-```
-
-**Single-shot mode:**
-
-```bash
-python run.py --task "Write a function that sorts a list using merge sort, with tests"
-```
-
-### Programmatic Usage
-
-```python
-from code.agents import FunctionCallAgent
-from code.core.llm import HelloAgentsLLM
-from code.tools.builtin import FileTool, CodeExecutionTool, LinterTool, ProfilerTool
-
-llm = HelloAgentsLLM()
-
-# Register coding tools
-from code.tools.registry import ToolRegistry
-registry = ToolRegistry()
-registry.register_tool(FileTool(workspace="./my_project"))
-registry.register_tool(CodeExecutionTool(workspace="./my_project"))
-registry.register_tool(LinterTool(workspace="./my_project"))
-registry.register_tool(ProfilerTool(workspace="./my_project"))
-
-# Create the coding agent
-agent = FunctionCallAgent(
-    name="CodingAgent",
-    llm=llm,
-    tool_registry=registry,
-    system_prompt="You are a Python coding assistant with access to file, execution, linting, and profiling tools."
-)
-
-response = agent.run("Read main.py and check it for lint errors")
-```
 
 ## Tool Details
 
@@ -408,7 +588,7 @@ result = search.run({"action": "get_structure", "path": "src/core/agent.py"})
 
 ## Evaluation Benchmarks
 
-The project includes three evaluation suites for measuring agent performance. All evaluations are run through `eval.py`.
+The project includes three evaluation suites for measuring agent performance. All evaluations are run through `evaluation.py`.
 
 ### 1. BFCL (Berkeley Function Calling Leaderboard)
 
@@ -420,9 +600,9 @@ Measures an agent's ability to correctly generate **function/tool calls** — ch
 - **Metrics:** Overall accuracy, per-category accuracy, parameter-level accuracy, precision/recall/F1, score distribution
 
 ```bash
-python eval.py --benchmark bfcl --category simple_python --max-samples 50
-python eval.py --benchmark bfcl --category multiple --max-samples 50
-python eval.py --benchmark bfcl --category parallel --export
+python evaluation.py --benchmark bfcl --category simple_python --max-samples 50
+python evaluation.py --benchmark bfcl --category multiple --max-samples 50
+python evaluation.py --benchmark bfcl --category parallel --export
 ```
 
 ### 2. GAIA (General AI Assistants)
@@ -435,9 +615,9 @@ Measures an agent's ability to solve **real-world questions** requiring multi-st
 - **Metrics:** Exact match rate, partial match rate, per-level breakdown, difficulty progression analysis
 
 ```bash
-python eval.py --benchmark gaia --level 1 --max-samples 20
-python eval.py --benchmark gaia --level 2 --max-samples 20
-python eval.py --benchmark gaia --lenient --export
+python evaluation.py --benchmark gaia --level 1 --max-samples 20
+python evaluation.py --benchmark gaia --level 2 --max-samples 20
+python evaluation.py --benchmark gaia --lenient --export
 ```
 
 ### 3. Data Generation Quality (AIME / LLM Judge)
@@ -450,9 +630,9 @@ Evaluates the quality of **AI-generated math problems** using LLM-as-a-judge, wi
 - **Supports:** Both locally generated problem sets (JSON/JSONL) and AIME real problems from HuggingFace
 
 ```bash
-python eval.py --benchmark data_gen --data-path data/my_generated_problems.json --max-samples 20
-python eval.py --benchmark data_gen --year 2025 --max-samples 15
-python eval.py --benchmark data_gen --data-path data/problems.json --judge-model gpt-4o
+python evaluation.py --benchmark data_gen --data-path data/my_generated_problems.json --max-samples 20
+python evaluation.py --benchmark data_gen --year 2025 --max-samples 15
+python evaluation.py --benchmark data_gen --data-path data/problems.json --judge-model gpt-4o
 ```
 
 ### Common Options
@@ -476,21 +656,28 @@ Results are saved to the `results/` directory by default.
 CodingAgent/
 ├── code/
 │   ├── agents/                # Agent implementations
+│   │   ├── react_agent.py           # ReAct loop + debug loop + multi-turn messages + reflection
 │   │   ├── function_call_agent.py   # OpenAI function calling + parallel tool dispatch
-│   │   ├── react_agent.py           # ReAct loop + debug loop + multi-turn messages
 │   │   ├── reflection_agent.py      # Self-critique with robust stop detection
 │   │   ├── plan_solve_agent.py      # Decompose-then-execute with multi-strategy parsing
+│   │   ├── simple_agent.py          # Lightweight conversational agent
+│   │   ├── tool_aware_agent.py      # SimpleAgent with tool call monitoring
 │   │   └── prompts/
 │   │       ├── react.prompt         # ReAct format instructions
-│   │       └── debug.prompt         # Structured debug protocol template
+│   │       ├── debug.prompt         # Structured debug protocol template
+│   │       └── ...                  # Other agent prompt templates
 │   ├── core/                  # LLM abstraction, base classes, config
 │   │   ├── agent.py                 # Base agent with context budget & debug-aware printing
 │   │   ├── llm.py                   # Multi-provider LLM client with cached async
 │   │   ├── config.py                # Env-driven configuration
-│   │   └── output_parser.py         # Robust parsing with retry & auto-repair
+│   │   ├── message.py               # Message dataclass
+│   │   ├── exceptions.py            # Custom exceptions
+│   │   └── database_config.py       # Database configuration
 │   ├── tools/
 │   │   ├── base.py            # Tool ABC, @tool_action decorator
 │   │   ├── registry.py        # ToolRegistry
+│   │   ├── async_executor.py  # Async tool execution
+│   │   ├── chain.py           # Tool chaining
 │   │   └── builtin/           # Built-in tools
 │   │       ├── file_tool.py
 │   │       ├── code_execution_tool.py   # + shell command blocklist
@@ -499,7 +686,22 @@ CodingAgent/
 │   │       ├── git_tool.py
 │   │       ├── linter_tool.py
 │   │       ├── profiler_tool.py
-│   │       └── terminal_tool.py
+│   │       ├── terminal_tool.py
+│   │       ├── calculator.py
+│   │       ├── search_tool.py
+│   │       ├── memory_tool.py
+│   │       ├── note_tool.py
+│   │       ├── rag_tool.py
+│   │       ├── mcp_wrapper_tool.py
+│   │       ├── protocol_tools.py
+│   │       ├── rl_training_tool.py
+│   │       └── ...                      # Evaluation-specific tools
+│   ├── utils/                 # Shared utilities
+│   │   ├── helpers.py
+│   │   ├── logging.py
+│   │   ├── serialization.py
+│   │   ├── subprocess_utils.py
+│   │   └── trajectory.py
 │   ├── memory/                # Memory systems (working memory with cached TF-IDF)
 │   ├── context/               # Context engineering (cached token counting)
 │   ├── protocols/             # MCP, A2A, ANP
@@ -509,11 +711,25 @@ CodingAgent/
 │           ├── bfcl/                # Tool calling accuracy evaluation
 │           ├── gaia/                # General AI assistant evaluation
 │           └── data_generation/     # LLM Judge & Win Rate evaluation
+├── prompts/                   # System & task prompts (for multi-agent workers)
+│   ├── system.prompt                # Shared system prompt
+│   ├── orchestrator.prompt          # Orchestrator text-mode prompt
+│   ├── orchestrator_fc.prompt       # Orchestrator function-calling prompt
+│   ├── code_review.prompt           # Review worker prompt
+│   ├── test_generation.prompt       # Test worker prompt
+│   ├── optimization.prompt          # Optimization worker prompt
+│   ├── debug.prompt                 # Debug worker prompt
+│   └── ...
 ├── data/                      # Datasets (downloaded separately)
-│   ├── bfcl/data/                   # BFCL v4 test data + ground truth
-│   └── gaia/                        # GAIA questions + attached files
-├── run.py                     # CLI entry point (sandbox/direct/single-shot modes)
-├── eval.py                    # Evaluation runner for all benchmarks
+│   ├── BFCL/                        # BFCL test data + ground truth
+│   ├── GAIA/                        # GAIA questions + attached files
+│   ├── AIME/                        # AIME math problems
+│   ├── KodCode/                     # KodCode dataset
+│   └── xCode/                       # xCode dataset (batch mode input)
+├── inference.py               # Single-agent entry point (REPL / batch)
+├── run_multi.py               # Multi-agent entry point (orchestrator + workers)
+├── evaluation.py              # Evaluation runner for all benchmarks
+├── results/                   # Evaluation and inference results
 ├── examples/                  # Usage examples
 ├── tests/                     # Test suite
 └── docs/                      # Documentation

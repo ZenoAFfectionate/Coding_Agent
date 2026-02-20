@@ -1,6 +1,7 @@
 """Plan and Solve Agent -- decompose-then-execute agent."""
 
 import ast
+import json
 import re
 from typing import Optional, List, Dict
 from ..core.agent import Agent
@@ -46,11 +47,15 @@ class Planner:
         except (ValueError, SyntaxError, IndexError):
             pass
 
-        # Strategy 2: Try JSON parsing (handles ```json blocks and bare JSON)
-        from ..core.output_parser import OutputParser
-        parsed = OutputParser.parse_json(response_text)
-        if isinstance(parsed, list) and parsed:
-            return [str(item) for item in parsed]
+        # Strategy 2: Try JSON array from ```json block or bare text
+        json_match = re.search(r"```(?:json)?\s*\n?(.*?)```", response_text, re.DOTALL)
+        json_candidate = json_match.group(1).strip() if json_match else response_text.strip()
+        try:
+            parsed = json.loads(json_candidate)
+            if isinstance(parsed, list) and parsed:
+                return [str(item) for item in parsed]
+        except (json.JSONDecodeError, ValueError):
+            pass
 
         # Strategy 3: Extract numbered list from plain text (e.g. "1. Do X\n2. Do Y")
         steps = re.findall(r'(?:^|\n)\s*\d+[\.\)]\s*(.+)', response_text)

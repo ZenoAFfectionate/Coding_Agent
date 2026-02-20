@@ -37,6 +37,7 @@ import re
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -97,7 +98,7 @@ class TestRunnerTool(Tool):
 
         # Check if pytest is installed
         try:
-            result = subprocess.run(
+            result = safe_run(
                 ["python", "-m", "pytest", "--version"],
                 capture_output=True,
                 text=True,
@@ -127,7 +128,7 @@ class TestRunnerTool(Tool):
         """
         effective_timeout = timeout or self.timeout
         try:
-            result = subprocess.run(
+            result = safe_run(
                 args,
                 cwd=str(self.project_path),
                 capture_output=True,

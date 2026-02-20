@@ -36,6 +36,7 @@ import shutil
 import json
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter
 
 
@@ -236,11 +237,12 @@ class BFCLEvaluationTool(Tool):
 
             print(f"\n🔄 运行命令: {' '.join(cmd)}")
 
-            result = subprocess.run(
+            result = safe_run(
                 cmd,
                 cwd=str(self.project_root),
                 capture_output=True,
                 text=True,
+                timeout=600,
                 encoding='utf-8'
             )
 

@@ -335,6 +335,40 @@ class HelloAgentsLLM:
         except Exception as e:
             raise HelloAgentsException(f"LLM调用失败: {str(e)}")
 
+    def invoke_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        tool_choice: str | dict = "auto",
+        **kwargs,
+    ):
+        """Call the LLM with OpenAI-compatible function calling.
+
+        Returns the raw ChatCompletion response so the caller can inspect
+        ``tool_calls``, ``finish_reason``, etc.
+
+        Args:
+            messages: Conversation messages.
+            tools: List of tool/function schemas.
+            tool_choice: "auto", "required", "none", or a specific function selector.
+            **kwargs: Extra parameters forwarded to the API (temperature, max_tokens, etc.).
+
+        Returns:
+            The ChatCompletion response object.
+        """
+        try:
+            return self._client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=kwargs.get("temperature", self.temperature),
+                max_tokens=kwargs.get("max_tokens", self.max_tokens),
+                **{k: v for k, v in kwargs.items() if k not in ["temperature", "max_tokens"]},
+            )
+        except Exception as e:
+            raise HelloAgentsException(f"LLM tool-call invocation failed: {str(e)}")
+
     def stream_invoke(self, messages: list[dict[str, str]], **kwargs) -> Iterator[str]:
         """
         流式调用LLM的别名方法，与think方法功能相同。

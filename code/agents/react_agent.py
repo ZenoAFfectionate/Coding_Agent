@@ -1,21 +1,40 @@
-"""ReAct (Reasoning and Acting) Agent.
+"""ReAct Agent — text-based Thought/Action parsing.
 
-Uses a multi-turn message architecture where each thought/action/observation
-becomes its own message, avoiding the O(N^2) cost of re-serializing the
-entire history and tool descriptions on every step.
+Uses plain-text ``Thought: ... / Action: tool_name[args]`` format that works
+reliably with **any** LLM, including models that do not support OpenAI-style
+function calling (e.g. Qwen-Thinking series, local models, etc.).
+
+Key features:
+- Tool output truncation & context budget management
+- Automatic debug loop on tool errors
+- Reflection / self-verification before final answer (text-based)
+- Structured logging & trajectory tracking
 """
 
 import re
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from ..core.agent import Agent
 from ..core.llm import HelloAgentsLLM
 from ..core.config import Config
 from ..core.message import Message
-from ..core.output_parser import OutputParser
 from ..tools.registry import ToolRegistry
 from .prompts import load_agent_prompt
+
+
+# Patterns used to classify error types in tool output.
+_ERROR_TYPE_PATTERNS = [
+    ("syntaxerror",                          "syntax_error"),
+    ("importerror",                          "import_error"),
+    ("modulenotfounderror",                  "import_error"),
+    ("timeout",                              "timeout"),
+    ("timed out",                            "timeout"),
+    ("typeerror",                            "runtime_error"),
+    ("valueerror",                           "runtime_error"),
+    ("attributeerror",                       "runtime_error"),
+    ("nameerror",                            "runtime_error"),
+]
 
 
 @dataclass
@@ -27,31 +46,36 @@ class _DebugState:
     failed_action: str = ""
     attempts: int = 0
 
-    def reset(self):
-        self.active = False
-        self.error_type = ""
-        self.error_summary = ""
-        self.failed_action = ""
-        self.attempts = 0
-
 
 class ReActAgent(Agent):
-    """ReAct (Reasoning and Acting) Agent.
+    """ReAct Agent using text-based Thought/Action parsing.
 
-    Combines reasoning and action in an iterative loop:
-    1. Analyze the problem and plan actions
-    2. Call external tools for information
-    3. Reason about observations
-    4. Iterate until a final answer is reached
-
-    Key design:
-    - Multi-turn messages: tool descriptions sent once in system prompt,
-      each step appends assistant/user messages incrementally.
-    - Tool output truncation to prevent context window bloat.
-    - Robust output parsing with OutputParser (retry on failure).
-    - Context budget management (auto-trim history to fit token limit).
-    - Structured logging and trajectory tracking with timing.
+    The LLM responds with ``Thought: <reasoning>`` followed by one of:
+    - ``Action: tool_name[json_args]`` — to call a tool
+    - ``Action: Finish[answer]``       — to complete the task
     """
+
+    # Default reflection prompt used when no external template is provided.
+    _DEFAULT_REFLECTION_PROMPT = (
+        "You are a critical quality reviewer for a coding agent. "
+        "Evaluate whether the proposed answer fully and correctly "
+        "addresses the user's question.\n\n"
+        "Check for:\n"
+        "1. **Completeness** — are all parts addressed?\n"
+        "2. **Correctness** — any errors or contradictions?\n"
+        "3. **Verification** — if code was required, was it written to a file and tested?\n"
+        "{verification_note}\n\n"
+        "## Agent activity\n"
+        "- **Files written**: {files_written}\n"
+        "- **Tests executed**: {tests_executed}\n"
+        "- **Tools used**: {tools_summary}\n\n"
+        "## Original question\n{question}\n\n"
+        "## Proposed answer\n{proposed_answer}\n\n"
+        "Respond in EXACTLY this format:\n"
+        "Verdict: APPROVED or NEEDS_REVISION\n"
+        "Reasoning: <one sentence>\n"
+        "Issues: <specific issues, or \"none\" if approved>"
+    )
 
     def __init__(
         self,
@@ -60,414 +84,479 @@ class ReActAgent(Agent):
         tool_registry: Optional[ToolRegistry] = None,
         system_prompt: Optional[str] = None,
         config: Optional[Config] = None,
-        max_steps: int = 5,
-        custom_prompt: Optional[str] = None,
-        max_parse_retries: int = 1,
+        max_steps: int = 15,
         max_tool_output_chars: int = 8000,
         max_debug_attempts: int = 3,
         enable_debug_loop: bool = True,
+        enable_reflection: bool = True,
+        max_reflection_retries: int = 2,
+        reflection_prompt: Optional[str] = None,
         **kwargs,
     ):
-        """Initialize ReActAgent.
-
-        Args:
-            name: Agent name.
-            llm: LLM engine.
-            tool_registry: Tool registry (created empty if None).
-            system_prompt: System prompt.
-            config: Configuration.
-            max_steps: Maximum reasoning steps.
-            custom_prompt: Custom ReAct prompt template (must contain {tools} placeholder).
-            max_parse_retries: Retries when output parsing fails.
-            max_tool_output_chars: Maximum chars of tool output to include per message.
-            max_debug_attempts: Max consecutive debug retries before giving up on structured debug guidance.
-            enable_debug_loop: Whether to inject structured debug context on errors.
-            **kwargs: Passed to Agent base (enable_trajectory, enable_logging, etc.).
-        """
         super().__init__(name, llm, system_prompt, config, **kwargs)
 
-        self.tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
+        self.tool_registry = tool_registry or ToolRegistry()
         self.max_steps = max_steps
-        self.prompt_template = custom_prompt if custom_prompt else load_agent_prompt("react")
-        self.max_parse_retries = max_parse_retries
         self.max_tool_output_chars = max_tool_output_chars
-        self._parser = OutputParser()
         self.max_debug_attempts = max_debug_attempts
         self.enable_debug_loop = enable_debug_loop
+        self.enable_reflection = enable_reflection
+        self.max_reflection_retries = max_reflection_retries
+        self._reflection_prompt_template = reflection_prompt or self._DEFAULT_REFLECTION_PROMPT
         self._debug_prompt_template = load_agent_prompt("debug") if enable_debug_loop else ""
+        self._react_prompt_template = load_agent_prompt("react")
+
+    # ------------------------------------------------------------------ #
+    #  Tool management
+    # ------------------------------------------------------------------ #
 
     def add_tool(self, tool):
         """Add a tool to the registry (supports MCP auto-expand)."""
-        if hasattr(tool, 'auto_expand') and tool.auto_expand:
-            if hasattr(tool, '_available_tools') and tool._available_tools:
-                for mcp_tool in tool._available_tools:
-                    from ..tools.base import Tool
-                    wrapped_tool = Tool(
-                        name=f"{tool.name}_{mcp_tool['name']}",
-                        description=mcp_tool.get('description', ''),
-                        func=lambda input_text, t=tool, tn=mcp_tool['name']: t.run({
-                            "action": "call_tool",
-                            "tool_name": tn,
-                            "arguments": {"input": input_text}
-                        })
-                    )
-                    self.tool_registry.register_tool(wrapped_tool)
-                self._print(f"  MCP tool '{tool.name}' expanded into {len(tool._available_tools)} tools")
-            else:
-                self.tool_registry.register_tool(tool)
+        if getattr(tool, 'auto_expand', False) and getattr(tool, '_available_tools', None):
+            for mcp_tool in tool._available_tools:
+                from ..tools.base import Tool
+                wrapped = Tool(
+                    name=f"{tool.name}_{mcp_tool['name']}",
+                    description=mcp_tool.get('description', ''),
+                    func=lambda text, t=tool, tn=mcp_tool['name']: t.run({
+                        "action": "call_tool", "tool_name": tn,
+                        "arguments": {"input": text},
+                    }),
+                )
+                self.tool_registry.register_tool(wrapped)
+            self._print(f"  MCP tool '{tool.name}' expanded into {len(tool._available_tools)} tools")
         else:
             self.tool_registry.register_tool(tool)
 
-    def _build_react_system_prompt(self) -> str:
-        """Build the full system prompt with tool descriptions and ReAct format.
+    # ------------------------------------------------------------------ #
+    #  Prompt building
+    # ------------------------------------------------------------------ #
 
-        Merges the user-provided system_prompt with the ReAct prompt template
-        (which includes tool descriptions). This is constructed once per run()
-        call, not on every step.
-        """
+    def _build_prompt(self, question: str, history: List[str]) -> str:
+        """Build the full prompt for one ReAct step."""
         tools_desc = self.tool_registry.get_tools_description()
-        react_instructions = self.prompt_template.format(tools=tools_desc)
+        react_body = self._react_prompt_template.format(tools=tools_desc)
 
-        parts = []
-        if self.system_prompt:
-            parts.append(self.system_prompt)
-        parts.append(react_instructions)
+        parts = [p for p in [self.system_prompt, react_body] if p]
+        parts.append(f"\n## Current Task\n**Question:** {question}")
+        if history:
+            parts.append("\n## Execution History\n" + "\n".join(history))
+        parts.append("\nNow continue your reasoning and action:")
         return "\n\n".join(parts)
 
-    def _truncate_tool_output(self, output: str) -> str:
-        """Truncate tool output to prevent context window bloat.
+    # ------------------------------------------------------------------ #
+    #  Text parsing
+    # ------------------------------------------------------------------ #
 
-        Keeps the first and last portions of the output so the LLM
-        can see both the beginning and end of long results.
+    @staticmethod
+    def _strip_think_tags(text: str) -> str:
+        """Remove ``<think>...</think>`` blocks emitted by Qwen-Thinking models.
+
+        Also handles a missing opening ``<think>`` tag (common when served via
+        vLLM), where only ``</think>`` appears in the output — everything
+        before the last ``</think>`` is treated as thinking content and removed.
         """
-        if len(output) <= self.max_tool_output_chars:
-            return output
-        half = self.max_tool_output_chars // 2
+        # Standard: remove complete <think>...</think> blocks.
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Fallback: if an orphaned </think> remains (missing <think>),
+        # strip everything before and including the last </think>.
+        if "</think>" in cleaned:
+            cleaned = cleaned.rsplit("</think>", 1)[-1].strip()
+        return cleaned or text
+
+    @staticmethod
+    def _parse_response(text: str) -> Tuple[Optional[str], Optional[str]]:
+        """Extract Thought and Action from an LLM response."""
+        cleaned = ReActAgent._strip_think_tags(text)
+        thought_m = re.search(r"Thought:\s*(.+?)(?=\nAction:|\Z)", cleaned, re.DOTALL)
+        action_m = re.search(r"Action:\s*(.+)", cleaned)
         return (
-            output[:half]
-            + f"\n\n... [truncated {len(output) - self.max_tool_output_chars} chars] ...\n\n"
-            + output[-half:]
+            thought_m.group(1).strip() if thought_m else None,
+            action_m.group(1).strip() if action_m else None,
         )
 
-    def run(self, input_text: str, **kwargs) -> str:
-        """Run the ReAct agent loop.
+    @staticmethod
+    def _parse_action(action_text: str) -> Tuple[Optional[str], Optional[str]]:
+        """Parse ``tool_name[args]`` → (tool_name, raw_args) or (None, None)."""
+        m = re.match(r"(\w+)\[(.+)\]$", action_text, re.DOTALL)
+        return (m.group(1), m.group(2)) if m else (None, None)
 
-        Uses a multi-turn message list that grows incrementally:
-        - System message: system_prompt + tool descriptions + ReAct format (built once)
-        - User message: the original question (sent once)
-        - Then alternating assistant/user messages for each step
+    # ------------------------------------------------------------------ #
+    #  Helpers
+    # ------------------------------------------------------------------ #
 
-        This avoids the O(N^2) token cost of re-serializing the full history
-        and tool descriptions on every step.
+    def _truncate(self, text: str) -> str:
+        """Truncate tool output to ``max_tool_output_chars``."""
+        limit = self.max_tool_output_chars
+        if len(text) <= limit:
+            return text
+        half = limit // 2
+        return f"{text[:half]}\n\n... [truncated {len(text) - limit} chars] ...\n\n{text[-half:]}"
 
-        Args:
-            input_text: User question.
-            **kwargs: Extra kwargs for LLM calls.
+    def _end_run(self, input_text: str, answer: str, **log_kw) -> str:
+        """Common bookkeeping when the agent finishes (success or max-steps)."""
+        self.add_message(Message(input_text, "user"))
+        self.add_message(Message(answer, "assistant"))
+        if self.trajectory is not None:
+            self.trajectory.end()
+        if self.logger:
+            self.logger.lifecycle("end", **log_kw)
+        return answer
 
-        Returns:
-            Final answer string.
+    @staticmethod
+    def _history_error(thought: Optional[str], action: str, error_msg: str) -> List[str]:
+        """Build a 3-line history block for an error observation."""
+        return [
+            f"Thought: {thought or '(empty)'}",
+            f"Action: {action}",
+            f"Observation: {error_msg}",
+        ]
+
+    # ------------------------------------------------------------------ #
+    #  Reflection (text-based)
+    # ------------------------------------------------------------------ #
+
+    def _reflect_on_answer(
+        self,
+        question: str,
+        proposed_answer: str,
+        wrote_code: bool,
+        ran_tests: bool,
+        tools_used: List[str],
+        files_written: List[str] = None,
+    ) -> Tuple[bool, str]:
+        """Self-verify the proposed answer via a separate LLM call.
+
+        Returns ``(True, answer)`` if approved, ``(False, feedback)`` otherwise.
         """
-        current_step = 0
+        verification_note = ""
+        if wrote_code and not ran_tests:
+            verification_note = (
+                "\n\n**IMPORTANT**: The agent wrote code but did NOT execute it "
+                "or run any tests. You should NOT approve if the task required "
+                "working code. Reject and ask the agent to test with code_exec."
+            )
 
-        # Start trajectory tracking
+        tools_summary = ", ".join(tools_used) or "none"
+        files_written_str = ", ".join(files_written) if files_written else "none"
+        tests_executed_str = "yes" if ran_tests else "no"
+        prompt = self._reflection_prompt_template.format(
+            verification_note=verification_note,
+            question=question,
+            proposed_answer=proposed_answer,
+            tools_summary=tools_summary,
+            files_written=files_written_str,
+            tests_executed=tests_executed_str,
+        )
+
+        if self.logger:
+            self.logger.info("Reflection started", wrote_code=wrote_code,
+                             ran_tests=ran_tests, tools_used=tools_summary)
+
+        try:
+            if self.trajectory is not None:
+                self.trajectory.start_timer()
+
+            response = self.llm.invoke([{"role": "user", "content": prompt}])
+            duration = self.trajectory.stop_timer() if self.trajectory else None
+
+            if self.logger:
+                self.logger.llm_call(model=self.llm.model,
+                                     latency_ms=duration or 0, call_type="reflection")
+
+            if not response:
+                return True, proposed_answer
+
+            text = self._strip_think_tags(response)
+            approved = "APPROVED" in text.upper() and "NEEDS_REVISION" not in text.upper()
+
+            reasoning_m = re.search(r"Reasoning:\s*(.+?)(?=\nIssues:|\Z)", text, re.DOTALL)
+            issues_m = re.search(r"Issues:\s*(.+)", text, re.DOTALL)
+            reasoning = reasoning_m.group(1).strip() if reasoning_m else text[:200]
+            issues = issues_m.group(1).strip() if issues_m else ""
+
+            verdict = "APPROVED" if approved else "NEEDS REVISION"
+            self._print(f"  Reflection: {verdict} — {reasoning}")
+            self._track("reflection", f"approved={approved}: {reasoning}")
+            if self.logger:
+                self.logger.info(f"Reflection verdict: {verdict}",
+                                 approved=approved, reasoning=reasoning,
+                                 issues=issues, latency_ms=duration)
+
+            if approved:
+                return True, proposed_answer
+
+            return False, (
+                "Your proposed answer was reviewed and found to have issues:\n"
+                f"{issues or reasoning}\n\n"
+                "Please address these issues and provide a revised answer."
+            )
+
+        except Exception as e:
+            self._print(f"  Reflection failed ({e}), approving by default.")
+            if self.logger:
+                self.logger.error(f"Reflection failed: {e}")
+            return True, proposed_answer
+
+    # ------------------------------------------------------------------ #
+    #  Main loop
+    # ------------------------------------------------------------------ #
+
+    def run(self, input_text: str, **kwargs) -> str:
+        """Run the ReAct loop with text-based Thought/Action parsing."""
+        step = 0
+        reflection_attempts = 0
+        history: List[str] = []
+        tools_used: List[str] = []
+        wrote_code = False
+        ran_tests = False
+        files_written: List[str] = []
+        debug_state = _DebugState()
+
         if self.trajectory is not None:
             self.trajectory.reset()
             self.trajectory.start(task=input_text)
         if self.logger:
             self.logger.lifecycle("start", task=input_text)
-
         self._print(f"\n[{self.name}] Starting question: {input_text}", level="info")
 
-        # Build system prompt with tool descriptions and ReAct format (once)
-        system_content = self._build_react_system_prompt()
+        while step < self.max_steps:
+            step += 1
+            self._print(f"\n--- Step {step} ---")
 
-        # Build multi-turn message list incrementally
-        messages: list[dict] = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": input_text},
-        ]
-
-        # Debug state for structured error recovery
-        debug_state = _DebugState()
-
-        while current_step < self.max_steps:
-            current_step += 1
-            self._print(f"\n--- Step {current_step} ---")
-
-            # Apply context budget management (on a copy to preserve originals)
-            trimmed_messages = self._manage_context_budget(list(messages))
-
-            # LLM call with timing
+            # --- LLM call ---
+            prompt = self._build_prompt(input_text, history)
             if self.trajectory is not None:
                 self.trajectory.start_timer()
+            try:
+                response_text = self.llm.invoke(
+                    [{"role": "user", "content": prompt}], **kwargs,
+                )
+            except Exception as e:
+                self._print(f"  Error: LLM call failed: {e}", level="info")
+                self._track("error", f"LLM call failed: {e}")
+                break
 
-            response_text = self.llm.invoke(trimmed_messages, **kwargs)
-
-            llm_duration = self.trajectory.stop_timer() if self.trajectory else None
-            self._track("llm_call", response_text or "(empty)", duration_ms=llm_duration, step=current_step)
+            llm_ms = self.trajectory.stop_timer() if self.trajectory else None
+            self._track("llm_call", response_text or "", duration_ms=llm_ms, step=step)
             if self.logger:
-                self.logger.llm_call(model=self.llm.model, latency_ms=llm_duration or 0)
+                self.logger.llm_call(model=self.llm.model, latency_ms=llm_ms or 0)
 
             if not response_text:
-                self._print("  Error: LLM returned an empty response.", level="info")
+                self._print("  Error: LLM returned empty response.", level="info")
                 self._track("error", "LLM returned empty response")
                 break
 
-            # Parse output with robust parser + retry
-            thought, action, response_text = self._robust_parse(
-                response_text, trimmed_messages, **kwargs
-            )
+            # --- Parse response ---
+            thought, action = self._parse_response(response_text)
 
             if thought:
                 self._print(f"  Thought: {thought}")
-                self._track("thought", thought, step=current_step)
+                self._track("thought", thought, step=step)
                 if self.logger:
-                    self.logger.step("thought", thought, step_num=current_step)
+                    self.logger.step("thought", thought, step_num=step)
 
             if not action:
-                self._print("  Warning: failed to parse a valid Action. Stopping.", level="info")
-                self._track("error", "Failed to parse Action from LLM output")
-                break
-
-            # Add assistant response to multi-turn history
-            messages.append({"role": "assistant", "content": response_text})
-
-            # Check completion
-            if action.startswith("Finish"):
-                final_answer = self._parse_action_input(action)
-                self._print(f"  Final answer: {final_answer}", level="info")
-                self._track("final_answer", final_answer)
-
-                self.add_message(Message(input_text, "user"))
-                self.add_message(Message(final_answer, "assistant"))
-
-                if self.trajectory is not None:
-                    self.trajectory.end()
-                if self.logger:
-                    self.logger.lifecycle("end", final_answer_length=len(final_answer))
-
-                return final_answer
-
-            # Execute tool call
-            tool_name, tool_input = OutputParser.parse_tool_call(action)
-            if not tool_name or tool_input is None:
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Observation: Invalid Action format. "
-                        'Please use: ToolName[{"key": "value"}] or Finish[answer]'
-                    ),
-                })
-                self._track("error", f"Invalid action format: {action}")
+                self._print("  Warning: no Action found, retrying.", level="info")
+                history.extend(self._history_error(
+                    thought, "(missing)",
+                    "Error — you must include an Action. "
+                    "Use `tool_name[args]` or `Finish[answer]`.",
+                ))
                 continue
 
-            self._print(f"  Action: {tool_name}[{tool_input}]")
-            self._track("action", f"{tool_name}[{tool_input}]", tool=tool_name)
+            # --- Finish ---
+            if action.startswith("Finish"):
+                m = re.match(r"Finish\[(.+)\]$", action, re.DOTALL)
+                proposed = m.group(1).strip() if m else ""
+                self._print(f"  Finish proposed: {proposed[:200]}...")
 
-            # Tool call with timing
+                if self.enable_reflection and reflection_attempts < self.max_reflection_retries:
+                    approved, feedback = self._reflect_on_answer(
+                        input_text, proposed, wrote_code, ran_tests, tools_used,
+                        files_written=files_written,
+                    )
+                    if not approved:
+                        reflection_attempts += 1
+                        self._track("reflection_revise",
+                                    f"attempt {reflection_attempts}/{self.max_reflection_retries}",
+                                    step=step)
+                        history.extend([
+                            f"Thought: {thought or ''}",
+                            "Action: Finish[...]",
+                            f"Observation: {feedback}",
+                        ])
+                        continue
+
+                self._print(f"  Final answer: {proposed}", level="info")
+                self._track("final_answer", proposed)
+                return self._end_run(input_text, proposed,
+                                     final_answer_length=len(proposed))
+
+            # --- Tool call ---
+            tool_name, tool_args = self._parse_action(action)
+
+            if not tool_name:
+                history.extend(self._history_error(
+                    thought, action,
+                    "Error — invalid action format. Use `tool_name[json_args]` or `Finish[answer]`.",
+                ))
+                continue
+
+            available = self.tool_registry.list_tools()
+            if tool_name not in available:
+                history.extend(self._history_error(
+                    thought, action,
+                    f"Error — tool '{tool_name}' not found. Available: {', '.join(available)}",
+                ))
+                continue
+
+            self._print(f"  Action: {tool_name}[{tool_args[:200]}]")
+            self._track("action", f"{tool_name}[{tool_args}]", tool=tool_name)
+
+            # Execute
             if self.trajectory is not None:
                 self.trajectory.start_timer()
+            observation = self.tool_registry.execute_tool(tool_name, tool_args)
+            tool_ms = self.trajectory.stop_timer() if self.trajectory else None
 
-            observation = self.tool_registry.execute_tool(tool_name, tool_input)
-
-            tool_duration = self.trajectory.stop_timer() if self.trajectory else None
             obs_preview = observation[:500] + "..." if len(observation) > 500 else observation
             self._print(f"  Observation: {obs_preview}")
-            self._track("observation", observation, duration_ms=tool_duration, tool=tool_name)
+            self._track("observation", observation, duration_ms=tool_ms, tool=tool_name)
             if self.logger:
-                self.logger.tool_call(tool=tool_name, result=observation, latency_ms=tool_duration or 0)
+                self.logger.tool_call(tool=tool_name, result=observation,
+                                      latency_ms=tool_ms or 0)
 
-            # Truncate and add observation as user message (multi-turn)
-            truncated_obs = self._truncate_tool_output(observation)
-            messages.append({"role": "user", "content": f"Observation: {truncated_obs}"})
+            # Track usage for reflection
+            if tool_name not in tools_used:
+                tools_used.append(tool_name)
+            if tool_name == "file" and ('"write"' in tool_args or '"edit"' in tool_args):
+                wrote_code = True
+                # Try to extract filename from tool args
+                try:
+                    import json as _json
+                    _args = _json.loads(tool_args)
+                    _path = _args.get("path", "")
+                    if _path and _path not in files_written:
+                        files_written.append(_path)
+                except Exception:
+                    pass
+            if tool_name in ("code_exec", "test_runner"):
+                ran_tests = True
 
-            # --- Debug loop integration ---
-            if self.enable_debug_loop:
-                error_info = self._classify_observation(tool_name, observation)
-                if error_info is not None:
-                    if not debug_state.active:
-                        # Entering debug mode
-                        debug_state.active = True
-                        debug_state.error_type = error_info["error_type"]
-                        debug_state.error_summary = error_info["summary"]
-                        debug_state.failed_action = f"{tool_name}[{tool_input}]"
-                        debug_state.attempts = 1
-                    else:
-                        debug_state.attempts += 1
+            # Debug loop
+            debug_suffix = self._maybe_debug(debug_state, tool_name, tool_args, observation, step)
 
-                    if debug_state.attempts <= self.max_debug_attempts:
-                        debug_context = self._build_debug_context(debug_state)
-                        # Append debug guidance to the observation message
-                        messages[-1]["content"] += f"\n\n{debug_context}"
-                        self._track("debug", f"attempt {debug_state.attempts}/{self.max_debug_attempts}: {error_info['error_type']}", step=current_step)
-                    else:
-                        # Max debug attempts exhausted — let the agent continue normally
-                        exhaustion_msg = (
-                            f"\n\n[Debug loop exhausted ({self.max_debug_attempts} attempts) "
-                            f"for {debug_state.error_type}. Proceeding without further debug guidance.]"
-                        )
-                        messages[-1]["content"] += exhaustion_msg
-                        debug_state.reset()
-                else:
-                    # Successful observation — reset debug state
-                    if debug_state.active:
-                        self._track("debug_resolved", f"resolved after {debug_state.attempts} attempts", step=current_step)
-                        debug_state.reset()
+            # Append to history
+            history.extend([
+                f"Thought: {thought or '(reasoning omitted)'}",
+                f"Action: {action}",
+                f"Observation: {self._truncate(observation)}{debug_suffix}",
+            ])
 
+        # ---- Max steps reached ----
         self._print("  Max steps reached. Stopping.", level="info")
-        final_answer = "Unable to complete the task within the allowed number of steps."
         self._track("error", "Max steps reached without finding answer")
-
-        self.add_message(Message(input_text, "user"))
-        self.add_message(Message(final_answer, "assistant"))
-
-        if self.trajectory is not None:
-            self.trajectory.end()
-        if self.logger:
-            self.logger.lifecycle("end", reason="max_steps_reached")
-
-        return final_answer
-
-    # ------------------------------------------------------------------ #
-    #  Debug loop helpers
-    # ------------------------------------------------------------------ #
-
-    def _classify_observation(self, tool_name: str, observation: str) -> Optional[dict]:
-        """Classify a tool observation as an error if applicable.
-
-        Returns None if no error detected, or a dict with:
-          {"error_type": str, "summary": str}
-        """
-        obs_lower = observation.lower()
-
-        # --- code_exec tool ---
-        if tool_name == "code_exec":
-            # Check for non-zero exit code
-            exit_match = re.search(r"exit code:\s*(\d+)", obs_lower)
-            if exit_match and exit_match.group(1) != "0":
-                # Classify error subtype from stderr/traceback
-                error_type = "runtime_error"
-                if "syntaxerror" in obs_lower:
-                    error_type = "syntax_error"
-                elif "importerror" in obs_lower or "modulenotfounderror" in obs_lower:
-                    error_type = "import_error"
-                elif "timeout" in obs_lower or "timed out" in obs_lower:
-                    error_type = "timeout"
-                elif any(e in obs_lower for e in ("typeerror", "valueerror", "attributeerror", "nameerror")):
-                    error_type = "runtime_error"
-
-                summary = self._extract_error_summary(observation)
-                return {"error_type": error_type, "summary": summary}
-
-            # Also catch tracebacks even without explicit exit code
-            if "traceback (most recent call last)" in obs_lower:
-                error_type = "runtime_error"
-                if "syntaxerror" in obs_lower:
-                    error_type = "syntax_error"
-                elif "importerror" in obs_lower or "modulenotfounderror" in obs_lower:
-                    error_type = "import_error"
-                summary = self._extract_error_summary(observation)
-                return {"error_type": error_type, "summary": summary}
-
-        # --- test_runner tool ---
-        if tool_name == "test_runner":
-            if "failed" in obs_lower or "error" in obs_lower:
-                summary = self._extract_error_summary(observation)
-                return {"error_type": "test_failure", "summary": summary}
-
-        # --- Generic fallback for any tool ---
-        if "traceback (most recent call last)" in obs_lower:
-            summary = self._extract_error_summary(observation)
-            return {"error_type": "runtime_error", "summary": summary}
-
-        lines = observation.strip().splitlines()
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("Error:") or stripped.startswith("ERROR:"):
-                return {"error_type": "runtime_error", "summary": stripped}
-
-        return None
-
-    @staticmethod
-    def _extract_error_summary(observation: str) -> str:
-        """Extract a one-line error summary from a traceback or test output.
-
-        Returns the last line of a Python traceback (the actual exception),
-        or the first line containing 'FAILED'/'ERROR', or a truncated tail.
-        """
-        lines = observation.strip().splitlines()
-
-        # Walk backwards to find the exception line (last non-empty line after a traceback)
-        for line in reversed(lines):
-            stripped = line.strip()
-            if not stripped:
-                continue
-            # Python exception lines typically look like: "ValueError: ..."
-            if re.match(r"^[A-Z]\w*(Error|Exception|Warning)", stripped):
-                return stripped[:200]
-            # Test failure summary lines
-            if "FAILED" in stripped or "ERRORS" in stripped:
-                return stripped[:200]
-
-        # Fallback: return last non-empty line
-        for line in reversed(lines):
-            stripped = line.strip()
-            if stripped:
-                return stripped[:200]
-        return "Unknown error"
-
-    def _build_debug_context(self, debug_state: _DebugState) -> str:
-        """Build a structured debug prompt to guide the LLM through error recovery."""
-        return self._debug_prompt_template.format(
-            error_type=debug_state.error_type,
-            error_summary=debug_state.error_summary,
-            failed_action=debug_state.failed_action,
-            attempt=debug_state.attempts,
-            max_attempts=self.max_debug_attempts,
+        return self._end_run(
+            input_text,
+            "Unable to complete the task within the allowed number of steps.",
+            reason="max_steps_reached",
         )
 
     # ------------------------------------------------------------------ #
-    #  Output parsing with retry
+    #  Debug loop
     # ------------------------------------------------------------------ #
 
-    def _robust_parse(
-        self, response_text: str, messages: list, **kwargs
-    ) -> Tuple[Optional[str], Optional[str], str]:
-        """Parse LLM output with retry on failure.
+    def _maybe_debug(
+        self, state: _DebugState, tool_name: str,
+        tool_args: str, observation: str, step: int,
+    ) -> str:
+        """Check observation for errors and return debug guidance suffix."""
+        if not self.enable_debug_loop:
+            return ""
 
-        Uses OutputParser.parse_react() for robust extraction.
-        If parsing fails and retries are configured, sends a retry prompt
-        to the LLM asking it to correct its format.
+        error = self._classify_observation(tool_name, observation)
 
-        Returns:
-            (thought, action, final_response_text) tuple.
-            final_response_text may differ from the input if a retry succeeded.
-        """
-        thought, action = OutputParser.parse_react(response_text)
+        if error is None:
+            if state.active:
+                self._track("debug_resolved",
+                            f"resolved after {state.attempts} attempts", step=step)
+                state.__init__()  # reset
+            return ""
 
-        if action is not None:
-            return thought, action, response_text
+        if not state.active:
+            state.active = True
+            state.error_type = error["error_type"]
+            state.error_summary = error["summary"]
+            state.failed_action = f"{tool_name}[{tool_args}]"
+            state.attempts = 1
+        else:
+            state.attempts += 1
 
-        # Retry logic
-        for retry in range(self.max_parse_retries):
-            retry_prompt = OutputParser.build_retry_prompt(
-                original_output=response_text,
-                error_message="Could not find 'Action:' field in your response.",
-                expected_format="Thought: <your reasoning>\nAction: <tool_name>[<input>] or Finish[<answer>]",
-            )
-            retry_messages = messages + [
-                {"role": "assistant", "content": response_text},
-                {"role": "user", "content": retry_prompt},
-            ]
+        if state.attempts > self.max_debug_attempts:
+            suffix = (f"\n\n[Debug loop exhausted ({self.max_debug_attempts} attempts) "
+                      f"for {state.error_type}.]")
+            state.__init__()  # reset
+            return suffix
 
-            response_text = self.llm.invoke(retry_messages, **kwargs) or ""
-            thought, action = OutputParser.parse_react(response_text)
-            if action is not None:
-                return thought, action, response_text
+        self._track("debug",
+                     f"attempt {state.attempts}/{self.max_debug_attempts}: {error['error_type']}",
+                     step=step)
+        return "\n\n" + self._debug_prompt_template.format(
+            error_type=state.error_type,
+            error_summary=state.error_summary,
+            failed_action=state.failed_action,
+            attempt=state.attempts,
+            max_attempts=self.max_debug_attempts,
+        )
 
-        return thought, action, response_text
+    @staticmethod
+    def _classify_observation(tool_name: str, observation: str) -> Optional[dict]:
+        """Return ``{"error_type": ..., "summary": ...}`` if *observation* is an error."""
+        low = observation.lower()
 
-    def _parse_action_input(self, action_text: str) -> str:
-        """Extract content inside Finish[...]."""
-        _, content = OutputParser.parse_tool_call(action_text)
-        return content if content is not None else ""
+        # Detect error presence
+        has_nonzero_exit = bool(re.search(r"exit code:\s*[1-9]", low))
+        has_traceback = "traceback (most recent call last)" in low
+        has_error_prefix = any(
+            line.strip().startswith(("Error:", "ERROR:"))
+            for line in observation.strip().splitlines()
+        )
+
+        is_code_error = tool_name == "code_exec" and (has_nonzero_exit or has_traceback)
+        is_test_error = tool_name == "test_runner" and ("failed" in low or "error" in low)
+        is_generic_error = has_traceback or has_error_prefix
+
+        if not (is_code_error or is_test_error or is_generic_error):
+            return None
+
+        # Classify error type
+        if is_test_error:
+            error_type = "test_failure"
+        else:
+            error_type = "runtime_error"
+            for pattern, etype in _ERROR_TYPE_PATTERNS:
+                if pattern in low:
+                    error_type = etype
+                    break
+
+        return {
+            "error_type": error_type,
+            "summary": ReActAgent._extract_error_summary(observation),
+        }
+
+    @staticmethod
+    def _extract_error_summary(observation: str) -> str:
+        """Extract a one-line error summary from a traceback or test output."""
+        for line in reversed(observation.strip().splitlines()):
+            s = line.strip()
+            if not s:
+                continue
+            if re.match(r"^[A-Z]\w*(Error|Exception|Warning)", s):
+                return s[:200]
+            if "FAILED" in s or "ERRORS" in s:
+                return s[:200]
+            # If we reach a non-empty line that doesn't match known patterns,
+            # use it as the summary (last non-empty line).
+            return s[:200]
+        return "Unknown error"

@@ -22,6 +22,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
 
@@ -84,7 +85,7 @@ class LinterTool(Tool):
     def _run_cmd(self, args: List[str], timeout: Optional[int] = None) -> subprocess.CompletedProcess:
         """Execute a command and return the CompletedProcess result."""
         effective_timeout = timeout or self.timeout
-        return subprocess.run(
+        return safe_run(
             args,
             cwd=str(self.workspace),
             capture_output=True,

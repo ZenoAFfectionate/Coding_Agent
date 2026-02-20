@@ -1,0 +1,19 @@
+You are reviewing the orchestrator's proposed final answer before it is delivered to the user.
+
+## User's Original Request
+{user_request}
+
+## Accumulated Findings
+{blackboard}
+
+## Proposed Answer
+{proposed_answer}
+
+## Your Task
+Check for:
+1. **Completeness**: Does the answer address every part of the user's request?
+2. **Contradictions**: Are there conflicting findings that need reconciliation?
+3. **Accuracy**: Is the answer consistent with the worker findings?
+
+If the answer is satisfactory, respond with exactly: APPROVED
+If improvements are needed, provide the revised answer directly (no preamble).

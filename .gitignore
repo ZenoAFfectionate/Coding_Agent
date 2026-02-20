@@ -169,6 +169,7 @@ data/
 docs/
 tests/
 example/
+results/
 .claude
 
 # Sandbox temp directories
