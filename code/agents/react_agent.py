@@ -47,6 +47,9 @@ class _DebugState:
     attempts: int = 0
 
 
+_DEFAULT_PLANNING_PROMPT = load_agent_prompt("react_planning")
+
+
 class ReActAgent(Agent):
     """ReAct Agent using text-based Thought/Action parsing.
 
@@ -91,6 +94,7 @@ class ReActAgent(Agent):
         enable_reflection: bool = True,
         max_reflection_retries: int = 2,
         reflection_prompt: Optional[str] = None,
+        enable_planning: bool = False,
         **kwargs,
     ):
         super().__init__(name, llm, system_prompt, config, **kwargs)
@@ -103,8 +107,10 @@ class ReActAgent(Agent):
         self.enable_reflection = enable_reflection
         self.max_reflection_retries = max_reflection_retries
         self._reflection_prompt_template = reflection_prompt or self._DEFAULT_REFLECTION_PROMPT
+        self.enable_debug_loop = enable_debug_loop
         self._debug_prompt_template = load_agent_prompt("debug") if enable_debug_loop else ""
         self._react_prompt_template = load_agent_prompt("react")
+        self.enable_planning = enable_planning
 
     # ------------------------------------------------------------------ #
     #  Tool management
@@ -142,6 +148,21 @@ class ReActAgent(Agent):
         if history:
             parts.append("\n## Execution History\n" + "\n".join(history))
         parts.append("\nNow continue your reasoning and action:")
+        return "\n\n".join(parts)
+
+    def _build_planning_prompt(self, question: str) -> str:
+        """Build a planning-specific prompt that omits ReAct tool format examples.
+
+        Unlike ``_build_prompt``, this only lists tool *names* (no JSON schemas
+        or ``Action: tool_name[...]`` examples) so that smaller LLMs are not
+        tempted to emit tool calls during the planning phase.
+        """
+        tool_names = self.tool_registry.list_tools()
+        tools_list = ", ".join(tool_names) if tool_names else "none"
+        parts = [p for p in [self.system_prompt] if p]
+        parts.append(f"## Current Task\n**Question:** {question}")
+        parts.append(f"## Available Tools\n{tools_list}")
+        parts.append(_DEFAULT_PLANNING_PROMPT)
         return "\n\n".join(parts)
 
     # ------------------------------------------------------------------ #
@@ -194,9 +215,15 @@ class ReActAgent(Agent):
         return f"{text[:half]}\n\n... [truncated {len(text) - limit} chars] ...\n\n{text[-half:]}"
 
     def _end_run(self, input_text: str, answer: str, **log_kw) -> str:
-        """Common bookkeeping when the agent finishes (success or max-steps)."""
+        """Common bookkeeping when the agent finishes (success or max-steps).
+
+        Builds a rich execution summary from the trajectory and stores it
+        alongside the answer so the next REPL turn sees the full execution
+        context (tools called, files modified, errors encountered).
+        """
         self.add_message(Message(input_text, "user"))
-        self.add_message(Message(answer, "assistant"))
+        rich_answer = self._build_execution_summary(input_text, answer)
+        self.add_message(Message(rich_answer, "assistant"))
         if self.trajectory is not None:
             self.trajectory.end()
         if self.logger:
@@ -302,7 +329,7 @@ class ReActAgent(Agent):
     #  Main loop
     # ------------------------------------------------------------------ #
 
-    def run(self, input_text: str, **kwargs) -> str:
+    def run(self, input_text: str, *, enable_planning: bool | None = None, **kwargs) -> str:
         """Run the ReAct loop with text-based Thought/Action parsing."""
         step = 0
         reflection_attempts = 0
@@ -320,9 +347,68 @@ class ReActAgent(Agent):
             self.logger.lifecycle("start", task=input_text)
         self._print(f"\n[{self.name}] Starting question: {input_text}", level="info")
 
+        # --- Planning phase (optional) ---
+        planning_enabled = enable_planning if enable_planning is not None else self.enable_planning
+        if planning_enabled:
+            self._print(f"\n[REACT: plan]", level="info")
+            plan_prompt = self._build_planning_prompt(input_text)
+            if self.trajectory is not None:
+                self.trajectory.start_timer()
+            try:
+                plan_response = self.llm.invoke(
+                    [{"role": "user", "content": plan_prompt}], **kwargs,
+                )
+                plan_ms = self.trajectory.stop_timer() if self.trajectory else None
+                if plan_response:
+                    plan_text = self._strip_think_tags(plan_response)
+                    # Strip leaked tool-call markup that some models emit.
+                    plan_text = re.sub(
+                        r"<tool_call>.*?(?:</tool_call>|$)", "", plan_text, flags=re.DOTALL
+                    ).strip()
+                    # Strip any Action/Thought lines the LLM may have emitted.
+                    plan_text = re.sub(r"^[ \t]*Action:.*$", "", plan_text, flags=re.MULTILINE)
+                    plan_text = re.sub(r"^[ \t]*Thought:.*$", "", plan_text, flags=re.MULTILINE)
+                    plan_text = re.sub(r"\w+\[{.*?}\]", "", plan_text, flags=re.DOTALL)
+                    # Collapse multiple blank lines left by removals.
+                    plan_text = re.sub(r"\n{3,}", "\n\n", plan_text).strip()
+                    if plan_text:
+                        self._print(f"  Plan:\n{plan_text}")
+                        self._track("plan", plan_text, duration_ms=plan_ms)
+                        if self.logger:
+                            self.logger.llm_call(model=self.llm.model,
+                                                 latency_ms=plan_ms or 0, call_type="planning")
+                        history.append(f"Plan:\n{plan_text}")
+                    else:
+                        self._print("  Plan: (empty response, skipping)", level="info")
+                else:
+                    self._print("  Plan: (empty response, skipping)", level="info")
+            except Exception as e:
+                self._print(f"  Plan failed ({e}), proceeding without plan.", level="info")
+                if self.trajectory is not None:
+                    self.trajectory.stop_timer()
+
         while step < self.max_steps:
             step += 1
-            self._print(f"\n--- Step {step} ---")
+            self._print(f"\n[REACT: step {step}]")
+
+            # --- Context budget management ---
+            if self.context_max_tokens > 0 and len(history) > 4:
+                probe = self._build_prompt(input_text, history)
+                total_tokens = self._count_tokens(probe)
+                trigger = int(self.context_max_tokens * self.COMPACTION_THRESHOLD)
+                if total_tokens > trigger:
+                    keep = min(4, len(history) // 2)
+                    old_entries = history[:-keep]
+                    recent = history[-keep:]
+                    summary = self._compact_messages(
+                        [{"role": "assistant", "content": "\n".join(old_entries)}]
+                    )
+                    history = [f"[Previous steps summary]:\n{summary}"] + recent
+                    self._print(
+                        f"  [Compaction] History: {len(old_entries) + keep} entries "
+                        f"-> {len(history)} entries ({total_tokens} tokens -> "
+                        f"~{self._count_tokens(self._build_prompt(input_text, history))} tokens)",
+                    )
 
             # --- LLM call ---
             prompt = self._build_prompt(input_text, history)

@@ -15,6 +15,7 @@ Safety:
 """
 
 import os
+import re as _re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -93,6 +94,57 @@ class CodeExecutionTool(Tool):
             return text[: self.max_output_size] + f"\n... truncated ({len(text)} bytes total)"
         return text
 
+    @staticmethod
+    def _compact_traceback(stderr: str, max_frames: int = 5) -> str:
+        """Extract only the last *max_frames* frames from a Python traceback.
+
+        Non-traceback stderr is returned untouched. If a traceback block is
+        detected, keep only the last *max_frames* ``File "..."`` entries plus
+        the final error line.
+        """
+        tb_header = "Traceback (most recent call last):\n"
+        idx = stderr.find(tb_header)
+        if idx == -1:
+            return stderr
+
+        before = stderr[:idx]
+        tb_block = stderr[idx + len(tb_header):]
+
+        # Split into frames: each frame starts with "  File "
+        frame_lines: List[str] = []
+        current_frame: List[str] = []
+        error_line = ""
+
+        for line in tb_block.splitlines(keepends=True):
+            if line.startswith("  File "):
+                if current_frame:
+                    frame_lines.append("".join(current_frame))
+                current_frame = [line]
+            elif line.startswith("    ") and current_frame:
+                current_frame.append(line)
+            else:
+                # This is the error line (or extra text after the traceback)
+                if current_frame:
+                    frame_lines.append("".join(current_frame))
+                    current_frame = []
+                error_line += line
+
+        if current_frame:
+            frame_lines.append("".join(current_frame))
+
+        total_frames = len(frame_lines)
+        if total_frames <= max_frames:
+            # Nothing to truncate
+            return stderr
+
+        hidden = total_frames - max_frames
+        kept_frames = frame_lines[-max_frames:]
+        compact = before + tb_header
+        compact += f"  ... ({hidden} earlier frames hidden)\n"
+        compact += "".join(kept_frames)
+        compact += error_line
+        return compact
+
     @tool_action("exec_python", "Execute Python code in an isolated subprocess")
     def _run_python(self, parameters: Dict[str, Any]) -> str:
         """Execute Python code.
@@ -105,6 +157,29 @@ class CodeExecutionTool(Tool):
         code = parameters.get("code", "")
         if not code.strip():
             return "Error: code is empty."
+
+        # Fast-fail: detect stdin-blocking patterns to avoid 30s timeout
+        _stdin_patterns = [
+            r'\bsys\.stdin\.read\b',
+            r'\bsys\.stdin\.readline\b',
+            r'\binput\s*\(',
+        ]
+        # Only check top-level code (not inside function defs that won't be called)
+        for pattern in _stdin_patterns:
+            if _re.search(pattern, code):
+                # Check if the call is at module level (not just inside a def)
+                for line in code.splitlines():
+                    stripped = line.lstrip()
+                    if _re.search(pattern, stripped) and not stripped.startswith(('#', 'def ', 'class ')):
+                        indent = len(line) - len(stripped)
+                        # Top-level or in if __name__ block (indent 0 or 4)
+                        if indent <= 4:
+                            return (
+                                "Error: code_exec(\"python\", ...) has no stdin attached — "
+                                "sys.stdin.read() / input() will hang until timeout.\n"
+                                "Fix: write the solution to a file first, then use "
+                                "code_exec(\"shell\", \"echo '...' | python solution.py\") to pipe input."
+                            )
 
         timeout = parameters.get("timeout", self.timeout) or self.timeout
 
@@ -127,7 +202,7 @@ class CodeExecutionTool(Tool):
             )
 
             stdout = self._truncate(result.stdout)
-            stderr = self._truncate(result.stderr)
+            stderr = self._truncate(self._compact_traceback(result.stderr))
 
             parts = [f"=== Python Execution Result ==="]
             parts.append(f"Exit code: {result.returncode}")
@@ -182,7 +257,7 @@ class CodeExecutionTool(Tool):
             )
 
             stdout = self._truncate(result.stdout)
-            stderr = self._truncate(result.stderr)
+            stderr = self._truncate(self._compact_traceback(result.stderr))
 
             parts = [f"=== Shell Execution Result ==="]
             parts.append(f"Command: {command}")

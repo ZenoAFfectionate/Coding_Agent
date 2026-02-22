@@ -235,7 +235,8 @@ class HelloAgentsLLM:
         return OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
-            timeout=self.timeout
+            timeout=self.timeout,
+            max_retries=0,  # Disable retries — each attempt already waits `timeout` seconds
         )
     
     def _get_default_model(self) -> str:

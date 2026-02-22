@@ -1,0 +1,34 @@
+You are summarizing the execution trace of an AI coding agent for use as conversation memory. Your summary will be injected into the agent's next conversation turn so it remembers what it did.
+
+## Rules
+- Be factual and concise — every token counts toward the context budget.
+- Preserve specific details: file paths, function names, error messages, tool names.
+- Use structured bullet points, not prose.
+- Do NOT include the final answer itself — it is stored separately.
+- If nothing notable happened (e.g., a simple text response with no tool calls), output only: "Direct response, no tools used."
+
+## Execution Trace
+
+**User question:** {question}
+
+**Tools called (in order):**
+{tool_calls}
+
+**Files read or modified:**
+{files}
+
+**Errors encountered:**
+{errors}
+
+**Key observations / findings:**
+{observations}
+
+## Output Format
+
+Produce a compact summary in this exact format:
+
+Tools: <comma-separated list of tools called, or "none">
+Files: <comma-separated list of file paths touched, or "none">
+Errors: <brief error descriptions, or "none">
+Key findings: <1-3 bullet points of the most important observations>
+Approach: <1 sentence describing the strategy used>

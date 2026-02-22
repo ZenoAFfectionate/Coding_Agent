@@ -14,7 +14,7 @@ def run_bfcl(args):
     """Run BFCL (Berkeley Function Calling Leaderboard) evaluation."""
     from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
     from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
-    from inference import build_agent
+    from react_agent import build_agent
 
     agent = build_agent(
         workspace=args.workspace,
@@ -50,7 +50,7 @@ def run_gaia(args):
     """Run GAIA (General AI Assistants) evaluation."""
     from code.evaluation.benchmarks.gaia.dataset import GAIADataset
     from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
-    from inference import build_agent
+    from react_agent import build_agent
 
     agent = build_agent(
         workspace=args.workspace,
@@ -81,6 +81,47 @@ def run_gaia(args):
     if args.export:
         export_path = Path(f"results/gaia_{level_tag}_gaia_format.jsonl")
         evaluator.export_to_gaia_format(results, export_path)
+
+
+def run_swe(args):
+    """Run SWE-bench (Software Engineering Benchmark) evaluation."""
+    from code.evaluation.benchmarks.swe.dataset import SWEDataset
+    from code.evaluation.benchmarks.swe.evaluator import SWEEvaluator
+    from react_agent import build_agent
+
+    dataset = SWEDataset(
+        split=args.split,
+        data_dir=args.data_dir or "data/SWE",
+        repo_filter=args.repo_filter,
+    )
+    evaluator = SWEEvaluator(
+        dataset=dataset,
+        timeout_per_instance=args.timeout_per_instance,
+        run_tests=args.run_tests,
+    )
+
+    # Pass build_agent as factory; evaluator creates a fresh agent per instance
+    results = evaluator.evaluate(
+        agent_factory=build_agent,
+        max_samples=args.max_samples,
+        max_iterations=args.max_iterations,
+        temperature=args.temperature,
+    )
+
+    # Save results
+    repo_tag = args.repo_filter.replace("/", "_") if args.repo_filter else "all"
+    output_path = Path(
+        args.output or f"results/swe_{args.split}_{repo_tag}_results.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2, default=str)
+    print(f"\nResults saved to: {output_path}")
+
+    # Export to SWE-bench official submission format
+    if args.export:
+        export_path = Path(f"results/swe_{args.split}_{repo_tag}_swe_format.jsonl")
+        evaluator.export_to_swe_format(results, export_path)
 
 
 def run_data_gen(args):
@@ -127,11 +168,11 @@ def run_data_gen(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run agent evaluation benchmarks (BFCL, GAIA, Data Generation)"
+        description="Run agent evaluation benchmarks (BFCL, GAIA, SWE-bench, Data Generation)"
     )
     parser.add_argument(
         "--benchmark", "-b",
-        choices=["bfcl", "gaia", "data_gen"],
+        choices=["bfcl", "gaia", "swe", "data_gen"],
         required=True,
         help="Benchmark to run",
     )
@@ -171,7 +212,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str, default=None,
-        help="[BFCL/GAIA] Data directory path",
+        help="[BFCL/GAIA/SWE] Data directory path",
     )
 
     # GAIA-specific
@@ -204,11 +245,35 @@ def main():
         help="[data_gen] Model name for LLM Judge (default: from .env)",
     )
 
+    # SWE-bench-specific
+    parser.add_argument(
+        "--split",
+        type=str, default="dev",
+        choices=["dev", "test", "train"],
+        help="[SWE] Dataset split (default: dev)",
+    )
+    parser.add_argument(
+        "--repo-filter",
+        type=str, default=None,
+        help="[SWE] Only evaluate instances from this repo (e.g., django/django)",
+    )
+    parser.add_argument(
+        "--timeout-per-instance",
+        type=int, default=600,
+        help="[SWE] Timeout in seconds per instance (default: 600)",
+    )
+    parser.add_argument(
+        "--run-tests",
+        action="store_true",
+        help="[SWE] Run FAIL_TO_PASS tests for verification (requires repo deps)",
+    )
+
     args = parser.parse_args()
 
     dispatch = {
         "bfcl": run_bfcl,
         "gaia": run_gaia,
+        "swe": run_swe,
         "data_gen": run_data_gen,
     }
     dispatch[args.benchmark](args)

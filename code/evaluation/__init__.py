@@ -31,6 +31,8 @@ from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
 from code.evaluation.benchmarks.data_generation.dataset import AIDataset
 from code.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
 from code.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
+from code.evaluation.benchmarks.swe.dataset import SWEDataset
+from code.evaluation.benchmarks.swe.evaluator import SWEEvaluator
 
 __version__ = "0.1.0"
 
@@ -39,11 +41,13 @@ __all__ = [
     "BFCLDataset",
     "GAIADataset",
     "AIDataset",
+    "SWEDataset",
 
     # Benchmark评估器
     "BFCLEvaluator",
     "GAIAEvaluator",
     "LLMJudgeEvaluator",
     "WinRateEvaluator",
+    "SWEEvaluator",
 ]
 

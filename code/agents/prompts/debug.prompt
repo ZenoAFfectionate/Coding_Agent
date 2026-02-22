@@ -6,12 +6,13 @@ Failed action: {failed_action}
 Follow this debugging protocol step by step:
 1. ANALYZE: Identify the exact error — type, file path, and line number from the traceback above.
 2. READ: Read the relevant source code around the error location.
-3. DIAGNOSE: State your hypothesis for the root cause in your thought.
-4. FIX: Apply a minimal, targeted fix.
-5. VERIFY: Re-run the exact command or test that failed to confirm the fix.
+3. EXPLAIN: Walk through your current code step-by-step and compare against the intended behavior. Identify the specific line(s) where the logic diverges from what is expected.
+4. DIAGNOSE: State your hypothesis for the root cause in your thought.
+5. FIX: Apply a minimal, targeted fix.
+6. VERIFY: Re-run the exact command or test that failed to confirm the fix.
 
 Rules:
 - If the error is in how you **called a tool** (wrong arguments, placeholder text, formatting), fix the tool call directly. Do NOT re-analyze the original problem.
-- Do NOT skip step 2 (reading the code). You must read before fixing.
+- Do NOT skip step 2 (reading the code) or step 3 (explaining your logic). You must read and explain before fixing.
 - Do NOT repeat the exact same action that just failed without making changes first.
 - Make the smallest possible fix — do not refactor unrelated code.

@@ -1,3 +1,17 @@
 {problem}
 
-Write a complete Python program that reads from stdin and writes to stdout. Save it as a single .py file using the file tool.
+## Requirements
+- Write a **complete** Python program that reads from **stdin** and writes to **stdout**.
+- Save it as `solution.py` using the file tool.
+
+## Testing
+- The `code_exec` python mode has **no stdin**. To test, use shell mode with a pipe:
+  ```
+  code_exec("shell", "echo 'sample_input' | python3 solution.py")
+  ```
+- Verify output against the sample(s) **exactly** — watch for trailing spaces, newlines, and numeric formatting.
+- If multiple test samples are given, test all of them.
+
+## Output Format
+- Print **only** the required answer — no labels, prompts, or debug output.
+- Match the sample output format precisely (integer vs float, separator, line breaks).

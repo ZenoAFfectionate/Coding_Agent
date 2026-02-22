@@ -11,11 +11,13 @@ from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
 from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
 from code.evaluation.benchmarks.data_generation.llm_judge import LLMJudgeEvaluator
 from code.evaluation.benchmarks.data_generation.win_rate import WinRateEvaluator
+from code.evaluation.benchmarks.swe.evaluator import SWEEvaluator
 
 __all__ = [
     "BFCLEvaluator",
     "GAIAEvaluator",
     "LLMJudgeEvaluator",
     "WinRateEvaluator",
+    "SWEEvaluator",
 ]
 

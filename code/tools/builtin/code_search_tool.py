@@ -18,7 +18,9 @@ import ast
 import subprocess
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+import networkx as nx
 
 from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
@@ -62,6 +64,7 @@ class CodeSearchTool(Tool):
             "ast_search": self._ast_search,
             "find_references": self._find_references,
             "get_structure": self._get_structure,
+            "repo_map": self._repo_map,
         }
         handler = dispatch.get(action)
         if handler is None:
@@ -71,7 +74,7 @@ class CodeSearchTool(Tool):
     def get_parameters(self) -> List[ToolParameter]:
         return [
             ToolParameter(name="action", type="string",
-                          description="Action: 'search' (grep), 'find_files' (glob), 'ast_search' (structural query), 'find_references' (symbol usages), or 'get_structure' (file outline)",
+                          description="Action: 'search' (grep), 'find_files' (glob), 'ast_search' (structural query), 'find_references' (symbol usages), 'get_structure' (file outline), or 'repo_map' (ranked dependency map)",
                           required=True),
             ToolParameter(name="pattern", type="string",
                           description="Search pattern (regex for search, glob for find_files)",
@@ -97,6 +100,12 @@ class CodeSearchTool(Tool):
             ToolParameter(name="symbol", type="string",
                           description="For find_references / ast_search: symbol name to search for (e.g. 'MyClass', 'my_func')",
                           required=False),
+            ToolParameter(name="query", type="string",
+                          description="For repo_map: optional keywords to bias ranking toward relevant files",
+                          required=False),
+            ToolParameter(name="max_tokens", type="integer",
+                          description="For repo_map: token budget for output (default 2048)",
+                          required=False, default=2048),
         ]
 
     def _truncate(self, text: str) -> str:
@@ -571,3 +580,221 @@ class CodeSearchTool(Tool):
             lines.extend(module_level_funcs)
 
         return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # repo_map
+    # ------------------------------------------------------------------
+
+    @tool_action("repo_map", "Build a ranked repository map of file definitions")
+    def _repo_map(self, parameters: Dict[str, Any]) -> str:
+        """Build a dependency-ranked map of the repository.
+
+        Uses PageRank over an inter-file dependency graph to surface the most
+        structurally important files, then emits their definitions within a
+        token budget.
+
+        Args:
+            parameters: Dict with path, query (optional), max_tokens (optional).
+        Returns:
+            Compressed repository map string.
+        """
+        search_path = self._safe_path(parameters.get("path", "."))
+        if search_path is None:
+            return "Error: path escapes workspace."
+        if not search_path.exists():
+            return f"Error: path not found: {parameters.get('path')}"
+
+        query = parameters.get("query")
+        max_tokens = parameters.get("max_tokens", 2048) or 2048
+
+        graph = self._build_dep_graph(search_path)
+        if graph.number_of_nodes() == 0:
+            return "No Python files found to build a repository map."
+
+        ranked = self._rank_graph(graph, query)
+        return self._format_map(graph, ranked, max_tokens)
+
+    def _build_dep_graph(self, search_path: Path) -> nx.DiGraph:
+        """Build an inter-file dependency graph from Python files.
+
+        Nodes are file paths (relative to workspace). Edges represent:
+        - Import relationships (from X import Y)
+        - Inheritance (class A(B) where B is defined elsewhere)
+        - Call-site references (calls to functions defined in other files)
+
+        Each node stores a list of definitions: (name, type, lineno, signature).
+        """
+        graph = nx.DiGraph()
+        py_files = self._collect_py_files(search_path, "*.py", limit=500)
+
+        # First pass: collect definitions per file
+        file_defs: Dict[str, List[Tuple[str, str, int, str]]] = {}
+        # Map definition name -> list of files defining it
+        name_to_files: Dict[str, List[str]] = {}
+
+        for py_file in py_files:
+            tree = self._safe_parse(py_file)
+            if tree is None:
+                continue
+            try:
+                rel = str(py_file.relative_to(self.workspace))
+            except ValueError:
+                rel = str(py_file)
+
+            defs: List[Tuple[str, str, int, str]] = []
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
+                    sig = ", ".join(self._node_name(b) for b in node.bases)
+                    defs.append((node.name, "class", node.lineno, f"({sig})" if sig else ""))
+                    name_to_files.setdefault(node.name, []).append(rel)
+                    # Also collect methods
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            args_str = self._format_args(item)
+                            kind = "async method" if isinstance(item, ast.AsyncFunctionDef) else "method"
+                            defs.append((f"{node.name}.{item.name}", kind, item.lineno, f"({args_str})"))
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    args_str = self._format_args(node)
+                    kind = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                    defs.append((node.name, kind, node.lineno, f"({args_str})"))
+                    name_to_files.setdefault(node.name, []).append(rel)
+
+            file_defs[rel] = defs
+            graph.add_node(rel, defs=defs)
+
+        # Second pass: build edges from imports, inheritance, and call-sites
+        for py_file in py_files:
+            tree = self._safe_parse(py_file)
+            if tree is None:
+                continue
+            try:
+                rel = str(py_file.relative_to(self.workspace))
+            except ValueError:
+                rel = str(py_file)
+
+            if rel not in graph:
+                continue
+
+            for node in ast.walk(tree):
+                # Import edges
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    target = self._resolve_import(node.module, search_path)
+                    if target and target in graph and target != rel:
+                        graph.add_edge(rel, target)
+
+                # Inheritance edges
+                if isinstance(node, ast.ClassDef):
+                    for base in node.bases:
+                        base_name = self._node_name(base)
+                        bare = base_name.rsplit(".", 1)[-1] if base_name else ""
+                        if bare in name_to_files:
+                            for target_file in name_to_files[bare]:
+                                if target_file != rel:
+                                    graph.add_edge(rel, target_file)
+
+                # Call-site edges
+                if isinstance(node, ast.Call):
+                    call_name = self._node_name(node.func)
+                    bare = call_name.rsplit(".", 1)[-1] if call_name else ""
+                    if bare in name_to_files:
+                        for target_file in name_to_files[bare]:
+                            if target_file != rel:
+                                graph.add_edge(rel, target_file)
+
+        return graph
+
+    def _resolve_import(self, module_name: str, search_path: Path) -> Optional[str]:
+        """Try to resolve a dotted module name to a file path relative to workspace."""
+        parts = module_name.split(".")
+        candidate = search_path / Path(*parts)
+        py_candidate = candidate.with_suffix(".py")
+        init_candidate = candidate / "__init__.py"
+
+        for c in (py_candidate, init_candidate):
+            if c.exists():
+                try:
+                    return str(c.relative_to(self.workspace))
+                except ValueError:
+                    pass
+        return None
+
+    def _rank_graph(self, graph: nx.DiGraph, query: Optional[str] = None) -> List[Tuple[str, float]]:
+        """Rank files using PageRank (optionally personalized by query keywords).
+
+        Args:
+            graph: The dependency graph.
+            query: Optional keywords; if provided, files containing matching
+                   definitions receive higher personalization weight.
+        Returns:
+            Sorted list of (file_path, score), descending by score.
+        """
+        if graph.number_of_nodes() == 0:
+            return []
+
+        personalization = None
+        if query:
+            keywords = query.lower().split()
+            personalization = {}
+            for node in graph.nodes:
+                defs = graph.nodes[node].get("defs", [])
+                score = 0.0
+                for name, _, _, _ in defs:
+                    name_lower = name.lower()
+                    for kw in keywords:
+                        if kw in name_lower:
+                            score += 1.0
+                personalization[node] = score + 0.1  # small base so all nodes participate
+
+        try:
+            scores = nx.pagerank(graph, personalization=personalization)
+        except nx.NetworkXError:
+            # Fallback: uniform scores
+            n = graph.number_of_nodes()
+            scores = {node: 1.0 / n for node in graph.nodes}
+
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return ranked
+
+    def _format_map(self, graph: nx.DiGraph, ranked_files: List[Tuple[str, float]], max_tokens: int) -> str:
+        """Format the repository map within a token budget.
+
+        Iterates files by rank and emits their definitions (classes with methods,
+        top-level functions) until the budget is exhausted.
+
+        Args:
+            graph: Dependency graph with node attributes.
+            ranked_files: Sorted (file_path, score) pairs.
+            max_tokens: Approximate token budget (~4 chars per token).
+        Returns:
+            Formatted repository map string.
+        """
+        max_chars = max_tokens * 4
+        header = "=== Repository Map ===\n"
+        parts = [header]
+        used = len(header)
+        files_with_defs = sum(1 for f, _ in ranked_files if graph.nodes[f].get("defs"))
+        files_shown = 0
+
+        for filepath, score in ranked_files:
+            defs = graph.nodes[filepath].get("defs", [])
+            if not defs:
+                continue
+
+            section_lines = [f"\n{filepath}"]
+            for name, kind, lineno, sig in defs:
+                if kind in ("method", "async method"):
+                    section_lines.append(f"    {kind} {name}{sig}  :{lineno}")
+                elif kind == "class":
+                    section_lines.append(f"  class {name}{sig}  :{lineno}")
+                else:
+                    section_lines.append(f"  {kind} {name}{sig}  :{lineno}")
+
+            section_text = "\n".join(section_lines)
+            if used + len(section_text) > max_chars:
+                parts.append(f"\n... ({files_with_defs} files total, output truncated to ~{max_tokens} tokens)")
+                break
+            parts.append(section_text)
+            used += len(section_text)
+            files_shown += 1
+
+        return "\n".join(parts)

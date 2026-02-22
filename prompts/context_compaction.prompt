@@ -1,0 +1,56 @@
+You are compacting the full conversation history of an AI coding agent. The context window is approaching its limit, so the ENTIRE conversation must be compressed into a concise summary that preserves all information the agent needs to continue working effectively.
+
+This summary will REPLACE the full conversation history — the agent will not see the original messages after compaction. Therefore, you must preserve every detail that could affect future reasoning.
+
+## What to Preserve (Critical)
+- **File paths** mentioned or modified (exact paths, not paraphrased)
+- **Function / class / variable names** discussed or changed
+- **Error messages** and their resolution status (resolved or still pending)
+- **Decisions made** and the reasoning behind them
+- **Code changes**: what was written, where, and why
+- **Tool calls**: which tools were used and their key results
+- **User preferences** or constraints expressed during the conversation
+- **Unresolved issues** or tasks the user mentioned but haven't been addressed yet
+
+## What to Compress
+- Verbose tool output (keep only the key findings, not raw output)
+- Repeated attempts at the same task (summarize the final outcome)
+- Conversational pleasantries and filler
+- Step-by-step reasoning that led to a conclusion (keep the conclusion)
+
+## Conversation to Compact
+
+{messages}
+
+## Output Format
+
+Produce a structured summary. Be specific — use exact names, paths, and values.
+
+<compacted_context>
+
+## Conversation History (compacted from {message_count} messages)
+
+### User Requests
+- <request 1: what the user asked for>
+- <request 2>
+
+### Actions Taken
+- <action: tool called, arguments, key result — one line per action>
+
+### Files Modified
+- <file_path>: <what was done (created/read/edited/deleted), current status>
+
+### Errors Encountered
+- <error description, resolution status>
+
+### Key Decisions
+- <decision: what was decided and why>
+
+### Current State
+- <what the agent was last working on>
+- <any pending tasks or unresolved issues>
+
+### Important Context
+- <anything else the agent needs to remember>
+
+</compacted_context>
