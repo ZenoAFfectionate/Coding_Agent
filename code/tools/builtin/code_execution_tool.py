@@ -81,7 +81,8 @@ class CodeExecutionTool(Tool):
     def get_parameters(self) -> List[ToolParameter]:
         return [
             ToolParameter(name="action", type="string",
-                          description="Execution mode: 'python' or 'shell'", required=True),
+                          description="Execution mode", required=True,
+                          enum=["python", "shell"]),
             ToolParameter(name="code", type="string",
                           description="Code/command to execute", required=True),
             ToolParameter(name="timeout", type="integer",

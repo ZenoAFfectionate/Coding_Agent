@@ -1,18 +1,18 @@
 """
-SWE-bench (Software Engineering Benchmark) 评估模块
+SWE-bench (Software Engineering Benchmark) Evaluation Module
 
-SWE-bench 是一个软件工程评估基准，包含真实的 GitHub Issue 修复任务。
+SWE-bench is a software engineering benchmark containing real GitHub issue fixing tasks.
 
-主要功能:
-- 数据集加载 (dev / test / train)
-- 仓库克隆与环境准备
-- 补丁生成与比较
-- 可选的测试执行验证
+Main features:
+- Dataset loading (dev / test / train)
+- Repository cloning and environment setup
+- Patch generation and comparison
+- Optional test execution verification
 
-参考:
-- 论文: https://arxiv.org/abs/2310.06770
-- 排行榜: https://www.swebench.com
-- 数据集: https://huggingface.co/datasets/princeton-nlp/SWE-bench
+References:
+- Paper: https://arxiv.org/abs/2310.06770
+- Leaderboard: https://www.swebench.com
+- Dataset: https://huggingface.co/datasets/princeton-nlp/SWE-bench
 """
 
 from code.evaluation.benchmarks.swe.dataset import SWEDataset

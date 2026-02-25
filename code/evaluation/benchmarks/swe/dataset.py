@@ -1,8 +1,8 @@
 """
-SWE-bench 数据集加载模块
+SWE-bench Dataset Loading Module
 
-负责加载 SWE-bench (Software Engineering Benchmark) 数据集,
-用于评估智能体修复真实 GitHub Issue 的能力。
+Loads the SWE-bench (Software Engineering Benchmark) dataset,
+used to evaluate an agent's ability to fix real GitHub issues.
 """
 
 from typing import List, Dict, Any, Optional, Union
@@ -11,19 +11,19 @@ import json
 
 
 class SWEDataset:
-    """SWE-bench 数据集加载器
+    """SWE-bench dataset loader
 
-    从本地 JSONL 文件加载 SWE-bench 数据集。
+    Loads SWE-bench data from local JSONL files.
 
-    SWE-bench 是一个软件工程评估基准，每个实例包含一个 GitHub Issue
-    (problem_statement)、对应的代码仓库状态 (repo + base_commit)、
-    以及用于验证的测试列表 (FAIL_TO_PASS / PASS_TO_PASS)。
+    SWE-bench is a software engineering evaluation benchmark where each instance
+    contains a GitHub issue (problem_statement), the corresponding repository state
+    (repo + base_commit), and test lists for verification (FAIL_TO_PASS / PASS_TO_PASS).
 
     Attributes:
-        split: 数据集分割 (dev/test/train)
-        data_dir: 数据目录路径
-        repo_filter: 可选的仓库名过滤器
-        data: 加载的数据列表
+        split: Dataset split (dev/test/train)
+        data_dir: Data directory path
+        repo_filter: Optional repository name filter
+        data: Loaded data list
     """
 
     def __init__(
@@ -32,12 +32,12 @@ class SWEDataset:
         data_dir: Optional[Union[str, Path]] = None,
         repo_filter: Optional[str] = None,
     ):
-        """初始化 SWE-bench 数据集加载器
+        """Initialize the SWE-bench dataset loader.
 
         Args:
-            split: 数据集分割 (dev/test/train)
-            data_dir: JSONL 数据文件所在目录，默认 data/SWE
-            repo_filter: 仅保留指定仓库的实例 (e.g. "astropy/astropy")
+            split: Dataset split (dev/test/train)
+            data_dir: Directory containing JSONL data files, defaults to data/SWE
+            repo_filter: Only keep instances from the specified repo (e.g. "astropy/astropy")
         """
         self.split = split
         self.data_dir = Path(data_dir) if data_dir else Path("data/SWE")
@@ -45,15 +45,15 @@ class SWEDataset:
         self.data: List[Dict[str, Any]] = []
 
     def load(self) -> List[Dict[str, Any]]:
-        """加载数据集
+        """Load the dataset.
 
         Returns:
-            数据集列表，每个元素为标准化后的 SWE-bench 实例
+            List of standardized SWE-bench instances
         """
         jsonl_path = self.data_dir / f"{self.split}.jsonl"
 
         if not jsonl_path.exists():
-            print(f"   ⚠️ 数据文件不存在: {jsonl_path}")
+            print(f"   [Warning] Data file not found: {jsonl_path}")
             return []
 
         self.data = []
@@ -66,28 +66,28 @@ class SWEDataset:
                 item = self._standardize_item(raw)
                 self.data.append(item)
 
-        # 按仓库过滤
+        # Filter by repository
         if self.repo_filter:
             self.data = [
                 item for item in self.data if item.get("repo") == self.repo_filter
             ]
 
-        print(f"✅ SWE-bench 数据集加载完成")
-        print(f"   分割: {self.split}")
-        print(f"   仓库过滤: {self.repo_filter or '全部'}")
-        print(f"   样本数: {len(self.data)}")
+        print(f"[Done] SWE-bench dataset loaded")
+        print(f"   Split       : {self.split}")
+        print(f"   Repo filter : {self.repo_filter or 'all'}")
+        print(f"   Samples     : {len(self.data)}")
 
         return self.data
 
     def _standardize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """标准化数据项格式
+        """Standardize the data item format.
 
-        将原始 JSONL 字段映射为统一 schema。
+        Maps raw JSONL fields to a unified schema.
         """
         fail_to_pass = item.get("FAIL_TO_PASS", "[]")
         pass_to_pass = item.get("PASS_TO_PASS", "[]")
 
-        # FAIL_TO_PASS / PASS_TO_PASS 在 JSONL 中可能是 JSON 字符串
+        # FAIL_TO_PASS / PASS_TO_PASS may be JSON strings in the JSONL
         if isinstance(fail_to_pass, str):
             try:
                 fail_to_pass = json.loads(fail_to_pass)
@@ -116,47 +116,47 @@ class SWEDataset:
         }
 
     def get_sample(self, index: int) -> Dict[str, Any]:
-        """获取单个样本
+        """Get a single sample.
 
         Args:
-            index: 样本索引
+            index: Sample index
 
         Returns:
-            样本数据
+            Sample data
         """
         if not self.data:
             self.load()
         return self.data[index] if index < len(self.data) else {}
 
     def get_by_repo(self, repo: str) -> List[Dict[str, Any]]:
-        """获取指定仓库的所有实例
+        """Get all instances for a specific repository.
 
         Args:
-            repo: 仓库全名 (e.g. "django/django")
+            repo: Full repository name (e.g. "django/django")
 
         Returns:
-            该仓库的所有样本
+            All samples from that repository
         """
         if not self.data:
             self.load()
         return [item for item in self.data if item.get("repo") == repo]
 
     def get_statistics(self) -> Dict[str, Any]:
-        """获取数据集统计信息
+        """Get dataset statistics.
 
         Returns:
-            统计信息字典
+            Statistics dictionary
         """
         if not self.data:
             self.load()
 
-        # 按仓库统计
+        # Count by repository
         repo_counts: Dict[str, int] = {}
         for item in self.data:
             repo = item.get("repo", "unknown")
             repo_counts[repo] = repo_counts.get(repo, 0) + 1
 
-        # 按版本统计
+        # Count by version
         version_counts: Dict[str, int] = {}
         for item in self.data:
             version = item.get("version", "unknown")
@@ -171,7 +171,7 @@ class SWEDataset:
         }
 
     def __len__(self) -> int:
-        """返回数据集大小"""
+        """Return the dataset size."""
         if not self.data:
             self.load()
         return len(self.data)
@@ -181,7 +181,7 @@ class SWEDataset:
         return True
 
     def __iter__(self):
-        """迭代器"""
+        """Iterator."""
         if not self.data:
             self.load()
         return iter(self.data)

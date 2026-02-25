@@ -1,0 +1,9 @@
+## Task: Write a Triton GPU Kernel
+
+{instruction}
+
+## Requirements
+- Write complete, runnable Triton code including all imports (torch, triton, triton.language as tl).
+- Include both the @triton.jit kernel function(s) AND the Python wrapper function(s) that launch them.
+- Save the code as `solution.py` using the file tool.
+- Do NOT include any test code or main blocks.

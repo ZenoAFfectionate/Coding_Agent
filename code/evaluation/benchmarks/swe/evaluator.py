@@ -1,39 +1,57 @@
 """
-SWE-bench 评估器模块
+SWE-bench Evaluator Module
 
-负责评估智能体在 SWE-bench 基准测试上的表现。
+Evaluates agent performance on the SWE-bench benchmark.
 
-每个实例代表一个真实的 GitHub Issue，评估器会:
-1. 克隆对应仓库并切换到 base_commit
-2. 构建 prompt（issue + hints）
-3. 运行智能体
-4. 通过 git diff 收集智能体产生的补丁
-5. 将预测补丁与 gold patch 进行比较（可选：运行测试）
+Each instance represents a real GitHub issue. The evaluator will:
+1. Clone the corresponding repository and checkout base_commit
+2. Build the prompt (issue + hints)
+3. Run the agent
+4. Collect the agent's patch via git diff
+5. Compare the predicted patch against the gold patch (optionally: run tests)
 """
 
 from typing import Dict, Any, List, Optional, Union, Callable
+import sys
 import time
 import json
+import logging
 import subprocess
 import tempfile
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 
 from code.evaluation.benchmarks.swe.dataset import SWEDataset
 from code.evaluation.benchmarks.swe.metrics import SWEMetrics
 
+logger = logging.getLogger(__name__)
+
+# Evaluation prompts directory (benchmark-specific prompts)
+EVAL_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+
+
+def _load_prompt(path: Path, fallback: str | None = None) -> str | None:
+    """Load a prompt file, returning *fallback* if the file is missing or empty."""
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+        return text or fallback
+    except FileNotFoundError:
+        logger.warning("Prompt file not found: %s", path)
+        return fallback
+
 
 class SWEEvaluator:
-    """SWE-bench 评估器
+    """SWE-bench evaluator
 
-    评估智能体修复真实 GitHub Issue 的能力。
+    Evaluates an agent's ability to fix real GitHub issues.
 
     Attributes:
-        dataset: SWE-bench 数据集
-        metrics: 指标计算器
-        workspace_base: 临时工作目录的父目录
-        timeout_per_instance: 每个实例的超时时间(秒)
-        run_tests: 是否运行 FAIL_TO_PASS 测试
+        dataset: SWE-bench dataset
+        metrics: Metrics calculator
+        workspace_base: Parent directory for temporary workspaces
+        timeout_per_instance: Timeout in seconds per instance
+        run_tests: Whether to run FAIL_TO_PASS tests
     """
 
     def __init__(
@@ -43,13 +61,13 @@ class SWEEvaluator:
         timeout_per_instance: int = 600,
         run_tests: bool = False,
     ):
-        """初始化 SWE-bench 评估器
+        """Initialize the SWE-bench evaluator.
 
         Args:
-            dataset: SWE-bench 数据集，为 None 则自动创建 (dev split)
-            workspace_base: 克隆仓库的基础目录，默认使用系统临时目录
-            timeout_per_instance: 每个实例的超时时间(秒)
-            run_tests: 是否执行 FAIL_TO_PASS 测试验证
+            dataset: SWE-bench dataset; if None, auto-creates with dev split
+            workspace_base: Base directory for cloned repos; defaults to system temp dir
+            timeout_per_instance: Timeout in seconds per instance
+            run_tests: Whether to execute FAIL_TO_PASS test verification
         """
         self.dataset = dataset if dataset is not None else SWEDataset()
         self.metrics = SWEMetrics()
@@ -57,45 +75,52 @@ class SWEEvaluator:
         self.timeout_per_instance = timeout_per_instance
         self.run_tests = run_tests
 
+        # Load benchmark-specific prompts
+        self.system_prompt = _load_prompt(EVAL_PROMPTS_DIR / "swev_system.prompt")
+        self.task_template = _load_prompt(EVAL_PROMPTS_DIR / "swev_task.prompt")
+        self.reflection_prompt = _load_prompt(EVAL_PROMPTS_DIR / "swev_reflection.prompt")
+
     def evaluate(
         self,
         agent_factory: Callable[..., Any],
         max_samples: Optional[int] = None,
         **agent_kwargs,
     ) -> Dict[str, Any]:
-        """评估智能体
+        """Evaluate the agent.
 
-        因为每个 SWE-bench 实例需要不同的 workspace（克隆的仓库），
-        所以传入的是 agent_factory (如 build_agent)，评估器会为每个
-        实例创建新的 agent。
+        Since each SWE-bench instance requires a different workspace (a cloned repo),
+        an agent_factory (e.g. build_agent) is passed in, and the evaluator creates
+        a new agent for each instance.
 
         Args:
-            agent_factory: 接受 workspace 关键字参数并返回 agent 的工厂函数
-            max_samples: 最大评估样本数，None 表示评估全部
-            **agent_kwargs: 传递给 agent_factory 的额外参数
+            agent_factory: Factory function that accepts a workspace keyword argument
+                           and returns an agent
+            max_samples: Maximum number of samples to evaluate; None means all
+            **agent_kwargs: Additional keyword arguments passed to agent_factory
 
         Returns:
-            评估结果字典
+            Evaluation results dictionary
         """
-        print(f"\n🔧 开始 SWE-bench 评估...")
+        print(f"\n[SWE-bench] Starting evaluation...")
 
-        # 加载数据集
+        # Load dataset
         dataset = self.dataset.load()
         if not dataset:
-            print("   ⚠️ 数据集为空，跳过评估")
+            print("   [Warning] Dataset is empty, skipping evaluation")
             return self._create_empty_results()
 
-        # 限制样本数量
+        # Limit sample count
         if max_samples:
             dataset = dataset[:max_samples]
 
-        print(f"   样本数量: {len(dataset)}")
-        print(f"   运行测试: {'是' if self.run_tests else '否'}")
+        print(f"   Samples   : {len(dataset)}")
+        print(f"   Run tests : {'yes' if self.run_tests else 'no'}")
 
         results: List[Dict[str, Any]] = []
         for i, sample in enumerate(dataset):
+            instance_id = sample.get("instance_id", "")
             print(
-                f"   进度: {i + 1}/{len(dataset)} - {sample.get('instance_id', '')}"
+                f"   Progress: {i + 1}/{len(dataset)} - {instance_id}"
             )
 
             try:
@@ -104,7 +129,7 @@ class SWEEvaluator:
                 )
                 results.append(sample_result)
             except Exception as e:
-                print(f"   ⚠️ 实例 {sample.get('instance_id')} 评估失败: {e}")
+                print(f"   [Warning] Instance {sample.get('instance_id')} evaluation failed: {e}")
                 results.append(
                     {
                         "instance_id": sample.get("instance_id", ""),
@@ -115,27 +140,58 @@ class SWEEvaluator:
                         "predicted_patch": "",
                         "error": str(e),
                         "score": 0.0,
+                        "model": "unknown",
+                        "steps_used": 0,
+                        "max_steps": None,
+                        "finish_reason": "error",
+                        "agent_answer": "",
+                        "gold_patch": sample.get("patch", ""),
+                        "trajectory_summary": [],
+                        "tool_calls_summary": {},
                     }
                 )
 
-        # 计算综合指标
+            # Print per-instance result line
+            last = results[-1]
+            status = "PASS" if last.get("score", 0) > 0 else "FAIL"
+            reason = last.get("finish_reason", "?")
+            steps = last.get("steps_used", "?")
+            t = last.get("execution_time", 0)
+            overlap = last.get("patch_metrics", {}).get("line_overlap", 0)
+            print(f"     -> {status} | {reason} | {steps} steps | {t:.1f}s | overlap={overlap:.0%}")
+
+        # Compute aggregate metrics
         overall_metrics = self.metrics.compute_metrics(results)
+
+        # Determine model name from first result
+        model = next(
+            (r.get("model") for r in results if r.get("model") and r["model"] != "unknown"),
+            "unknown",
+        )
 
         final_results = {
             "benchmark": "SWE-bench",
             "total_samples": len(results),
+            "model": model,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "max_steps": results[0].get("max_steps") if results else None,
             "resolved_rate": overall_metrics["resolved_rate"],
             "exact_match_rate": overall_metrics["exact_match_rate"],
             "average_line_overlap": overall_metrics["average_line_overlap"],
             "average_execution_time": overall_metrics["average_execution_time"],
+            "average_steps_used": overall_metrics["average_steps_used"],
+            "finish_reason_counts": overall_metrics["finish_reason_counts"],
+            "files_matched_count": overall_metrics["files_matched_count"],
             "repo_metrics": overall_metrics["repo_metrics"],
             "detailed_results": results,
         }
 
-        print(f"✅ SWE-bench 评估完成")
-        print(f"   解决率: {overall_metrics['resolved_rate']:.2%}")
-        print(f"   精确匹配率: {overall_metrics['exact_match_rate']:.2%}")
-        print(f"   平均行重叠度: {overall_metrics['average_line_overlap']:.2%}")
+        print(f"[Done] SWE-bench evaluation complete")
+        print(f"   Resolved rate       : {overall_metrics['resolved_rate']:.2%}")
+        print(f"   Exact match rate    : {overall_metrics['exact_match_rate']:.2%}")
+        print(f"   Avg line overlap    : {overall_metrics['average_line_overlap']:.2%}")
+        print(f"   Avg steps used      : {overall_metrics['average_steps_used']:.1f} / {final_results.get('max_steps', '?')}")
+        print(f"   Finish reasons      : {overall_metrics['finish_reason_counts']}")
 
         return final_results
 
@@ -145,44 +201,98 @@ class SWEEvaluator:
         sample: Dict[str, Any],
         **agent_kwargs,
     ) -> Dict[str, Any]:
-        """评估单个实例
+        """Evaluate a single instance.
 
         Args:
-            agent_factory: agent 工厂函数
-            sample: SWE-bench 实例
-            **agent_kwargs: 传递给 agent_factory 的额外参数
+            agent_factory: Agent factory function
+            sample: SWE-bench instance
+            **agent_kwargs: Additional keyword arguments passed to agent_factory
 
         Returns:
-            单个实例的评估结果
+            Evaluation result for this instance
         """
         instance_id = sample.get("instance_id", "")
         workspace = None
 
         try:
-            # 1. 克隆仓库并切换到 base_commit
+            # 1. Clone repo and checkout base_commit
             workspace = self._setup_repo(sample)
 
-            # 2. 创建 agent（workspace 指向克隆出的仓库）
-            agent = agent_factory(workspace=str(workspace), **agent_kwargs)
+            # 2. Create agent (workspace points to the cloned repo)
+            # Inject benchmark-specific system prompt and reflection prompt
+            factory_kwargs = dict(agent_kwargs)
+            if self.system_prompt:
+                factory_kwargs["system_prompt"] = self.system_prompt
+            if self.reflection_prompt:
+                factory_kwargs["reflection_prompt"] = self.reflection_prompt
+            # Disable reflection for SWE-bench: the reflection LLM cannot see
+            # git diff output, so it falsely rejects correct patches and causes
+            # the agent to undo its own correct edits.
+            factory_kwargs["enable_reflection"] = False
+            agent = agent_factory(workspace=str(workspace), **factory_kwargs)
 
-            # 3. 构建 prompt
+            # 3. Build prompt
             prompt = self._build_prompt(sample)
 
-            # 4. 运行 agent
+            # 4. Run agent
             start_time = time.time()
-            agent.run(prompt)
+            agent_answer = agent.run(prompt)
             execution_time = time.time() - start_time
 
-            # 5. 收集 agent 产生的 patch
+            # 4b. Extract trajectory data before cleanup
+            model = getattr(getattr(agent, "llm", None), "model", "unknown")
+            max_steps = getattr(agent, "max_steps", None)
+            trajectory = getattr(agent, "trajectory", None)
+
+            finish_reason = "unknown"
+            steps_used = 0
+            traj_summary: List[Dict[str, Any]] = []
+            tool_counts: Dict[str, int] = {}
+
+            if trajectory and trajectory.steps:
+                stats = trajectory.get_stats()
+                steps_used = stats.get("total_steps", len(trajectory.steps))
+
+                # Derive finish_reason
+                last_step = trajectory.steps[-1]
+                if last_step.step_type == "final_answer":
+                    finish_actions = [
+                        s for s in trajectory.steps
+                        if s.step_type == "action"
+                        and s.metadata.get("tool") == "finish"
+                    ]
+                    finish_reason = "finish_tool" if finish_actions else "text_only"
+                elif last_step.step_type == "error" and "Max steps" in (last_step.content or ""):
+                    finish_reason = "max_steps_reached"
+                elif steps_used >= (max_steps or float("inf")):
+                    finish_reason = "max_steps_reached"
+                else:
+                    finish_reason = "text_only"
+
+                # Build trajectory_summary and tool_calls_summary
+                for step in trajectory.steps:
+                    entry: Dict[str, Any] = {
+                        "step": step.step_number,
+                        "type": step.step_type,
+                    }
+                    if step.duration_ms is not None:
+                        entry["duration_ms"] = step.duration_ms
+                    tool = step.metadata.get("tool") if step.metadata else None
+                    if tool:
+                        entry["tool"] = tool
+                        tool_counts[tool] = tool_counts.get(tool, 0) + 1
+                    traj_summary.append(entry)
+
+            # 5. Collect the agent's patch
             predicted_patch = self._collect_patch(workspace)
 
-            # 6. 计算补丁指标
+            # 6. Compute patch metrics
             gold_patch = sample.get("patch", "")
             patch_metrics = self.metrics.calculate_patch_metrics(
                 predicted_patch, gold_patch
             )
 
-            # 7. 可选：运行测试
+            # 7. Optional: run tests
             tests_passed = False
             test_output = ""
             if self.run_tests and sample.get("FAIL_TO_PASS"):
@@ -202,6 +312,14 @@ class SWEEvaluator:
                 "score": score,
                 "execution_time": execution_time,
                 "test_output": test_output,
+                "model": model,
+                "steps_used": steps_used,
+                "max_steps": max_steps,
+                "finish_reason": finish_reason,
+                "agent_answer": agent_answer,
+                "gold_patch": gold_patch,
+                "trajectory_summary": traj_summary,
+                "tool_calls_summary": tool_counts,
             }
 
         except Exception as e:
@@ -214,6 +332,14 @@ class SWEEvaluator:
                 "predicted_patch": "",
                 "score": 0.0,
                 "error": str(e),
+                "model": "unknown",
+                "steps_used": 0,
+                "max_steps": None,
+                "finish_reason": "error",
+                "agent_answer": "",
+                "gold_patch": sample.get("patch", ""),
+                "trajectory_summary": [],
+                "tool_calls_summary": {},
             }
         finally:
             if workspace:
@@ -224,13 +350,13 @@ class SWEEvaluator:
     # ------------------------------------------------------------------
 
     def _setup_repo(self, sample: Dict[str, Any]) -> Path:
-        """克隆仓库并切换到 base_commit
+        """Clone the repository and checkout base_commit.
 
         Args:
-            sample: SWE-bench 实例
+            sample: SWE-bench instance
 
         Returns:
-            克隆出的仓库路径
+            Path to the cloned repository
         """
         repo = sample["repo"]
         base_commit = sample["base_commit"]
@@ -242,9 +368,9 @@ class SWEEvaluator:
             )
         )
 
-        repo_url = f"https://github.com/{repo}.git"
+        repo_url = f"git@github.com:{repo}.git"
 
-        # 浅克隆 + checkout 目标 commit
+        # Clone (no checkout) + checkout target commit
         subprocess.run(
             ["git", "clone", "--no-checkout", repo_url, str(workspace)],
             check=True,
@@ -259,16 +385,37 @@ class SWEEvaluator:
             timeout=60,
         )
 
+        # Attempt to install repo dependencies so tests can run.
+        # Strategy: try multiple approaches since repos vary in their build setup.
+        for install_cmd in [
+            # 1. Try installing just the test extras (fastest if it works)
+            [sys.executable, "-m", "pip", "install", "-e", ".[test]",
+             "--quiet", "--no-build-isolation"],
+            # 2. Fallback: install the repo itself (handles C extensions etc.)
+            [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
+        ]:
+            try:
+                result = subprocess.run(
+                    install_cmd,
+                    cwd=str(workspace),
+                    capture_output=True,
+                    timeout=300,
+                )
+                if result.returncode == 0:
+                    break
+            except Exception:
+                continue
+
         return workspace
 
     def _collect_patch(self, workspace: Path) -> str:
-        """收集 agent 在工作目录中的所有更改
+        """Collect all changes made by the agent in the workspace.
 
         Args:
-            workspace: 仓库工作目录
+            workspace: Repository working directory
 
         Returns:
-            unified diff 字符串
+            Unified diff string
         """
         result = subprocess.run(
             ["git", "diff", "HEAD"],
@@ -280,19 +427,32 @@ class SWEEvaluator:
         return result.stdout
 
     def _build_prompt(self, sample: Dict[str, Any]) -> str:
-        """构建发送给 agent 的 prompt
+        """Build the prompt to send to the agent.
+
+        Uses the swev_task.prompt template if available, otherwise falls back
+        to a hardcoded default.
 
         Args:
-            sample: SWE-bench 实例
+            sample: SWE-bench instance
 
         Returns:
-            prompt 字符串
+            Prompt string
         """
         problem = sample.get("problem_statement", "")
         hints = sample.get("hints_text", "")
         repo = sample.get("repo", "")
         instance_id = sample.get("instance_id", "")
 
+        if self.task_template:
+            hints_section = f"\n## Hints\n\n{hints}\n" if hints else ""
+            return self.task_template.format(
+                repo=repo,
+                instance_id=instance_id,
+                problem_statement=problem,
+                hints_section=hints_section,
+            )
+
+        # Fallback: hardcoded prompt (kept for backwards compatibility)
         prompt = (
             f"You are working on the repository: {repo}\n"
             f"Instance ID: {instance_id}\n\n"
@@ -315,11 +475,11 @@ class SWEEvaluator:
     def _run_tests(
         self, workspace: Path, fail_to_pass: List[str]
     ) -> tuple:
-        """运行 FAIL_TO_PASS 测试列表
+        """Run the FAIL_TO_PASS test list.
 
         Args:
-            workspace: 仓库工作目录
-            fail_to_pass: 需要从 FAIL 变为 PASS 的测试列表
+            workspace: Repository working directory
+            fail_to_pass: List of tests that should change from FAIL to PASS
 
         Returns:
             (all_passed, test_output)
@@ -327,9 +487,18 @@ class SWEEvaluator:
         if not fail_to_pass:
             return False, ""
 
+        # Ensure common test dependencies are available
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "hypothesis", "--quiet"],
+                capture_output=True, timeout=60,
+            )
+        except Exception:
+            pass
+
         try:
             result = subprocess.run(
-                ["python", "-m", "pytest"] + fail_to_pass + ["-x", "--tb=short"],
+                [sys.executable, "-m", "pytest"] + fail_to_pass + ["-x", "--tb=short"],
                 capture_output=True,
                 text=True,
                 cwd=str(workspace),
@@ -341,14 +510,14 @@ class SWEEvaluator:
             return False, str(e)
 
     def _cleanup_workspace(self, workspace: Path) -> None:
-        """清理临时工作目录"""
+        """Clean up the temporary workspace directory."""
         try:
             shutil.rmtree(str(workspace), ignore_errors=True)
         except Exception:
             pass
 
     def _create_empty_results(self) -> Dict[str, Any]:
-        """创建空的评估结果"""
+        """Create empty evaluation results."""
         return {
             "benchmark": "SWE-bench",
             "total_samples": 0,
@@ -365,13 +534,13 @@ class SWEEvaluator:
         results: Dict[str, Any],
         output_path: Union[str, Path],
     ) -> None:
-        """导出为 SWE-bench 官方提交格式
+        """Export results in SWE-bench official submission format.
 
-        JSONL 格式，每行包含 instance_id 和 model_patch。
+        JSONL format with each line containing instance_id and model_patch.
 
         Args:
-            results: evaluate() 返回的结果字典
-            output_path: 输出文件路径
+            results: Results dictionary returned by evaluate()
+            output_path: Output file path
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -386,6 +555,6 @@ class SWEEvaluator:
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        print(f"✅ SWE-bench 格式结果已导出")
-        print(f"   输出文件: {output_path}")
-        print(f"   样本数: {len(detailed)}")
+        print(f"[Done] SWE-bench format results exported")
+        print(f"   Output file : {output_path}")
+        print(f"   Samples     : {len(detailed)}")

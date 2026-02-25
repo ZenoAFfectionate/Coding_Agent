@@ -36,6 +36,7 @@ from .code_execution_tool import CodeExecutionTool
 from .code_search_tool import CodeSearchTool
 from .linter_tool import LinterTool
 from .profiler_tool import ProfilerTool
+from .finish_tool import FinishTool
 from .protocol_tools import MCPTool, A2ATool, ANPTool
 
 # Evaluation tools depend on the external hello_agents package.
@@ -74,6 +75,7 @@ __all__ = [
     "CodeSearchTool",
     "LinterTool",
     "ProfilerTool",
+    "FinishTool",
     "MCPTool",
     "A2ATool",
     "ANPTool",

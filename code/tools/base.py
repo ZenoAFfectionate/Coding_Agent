@@ -34,12 +34,13 @@ def tool_action(name: str = None, description: str = None):
 
 
 class ToolParameter(BaseModel):
-    """工具参数定义"""
+    """Tool parameter definition."""
     name: str
     type: str
     description: str
     required: bool = True
     default: Any = None
+    enum: Optional[List[str]] = None
 
 
 class Tool(ABC):
@@ -136,9 +137,13 @@ class Tool(ABC):
                 "description": param.description
             }
 
-            # 如果有默认值，添加到描述中（OpenAI schema 不支持 default 字段）
+            # If the parameter has an enum constraint, include it
+            if param.enum:
+                prop["enum"] = param.enum
+
+            # If there is a default value, note it in the description
             if param.default is not None:
-                prop["description"] = f"{param.description} (默认: {param.default})"
+                prop["description"] = f"{param.description} (default: {param.default})"
 
             # 如果是数组类型，添加 items 定义
             if param.type == "array":

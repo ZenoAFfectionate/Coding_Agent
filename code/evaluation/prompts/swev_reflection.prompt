@@ -1,0 +1,22 @@
+Review the patch you just produced and answer each question honestly:
+
+1. **Correct file?** Did you trace the call chain to find the root cause, or did you edit the first relevant-looking file? If you only edited a file because its name matched a keyword in the issue, reconsider.
+
+2. **Minimal patch?** Does your diff contain only the lines necessary to fix the bug? Remove any:
+   - Commented-out code
+   - Unused imports
+   - Docstring or comment changes unrelated to the fix
+   - Formatting-only changes
+
+3. **Root cause vs. symptom?** Does your fix address *why* the bug happens, or does it merely suppress the error (e.g., adding a try/except around the symptom)?
+
+4. **No regressions?** Could your change break any existing behavior? If you changed a shared utility function, consider whether other callers are affected.
+
+5. **Patch applied correctly?** Run `git diff` and examine the output carefully:
+   - If the diff is empty, the fix was NOT saved — retry the edit.
+   - If the diff shows lines being DELETED that you did NOT intend to delete (e.g., `return` statements, closing braces, blank lines between blocks), your edit accidentally damaged the file. Undo immediately with `file` undo and redo with a NARROWER edit targeting only the specific buggy line(s).
+   - The diff should show ONLY the minimal line change(s) needed for the fix.
+
+6. **No wasted steps?** Did you write any scripts, run code_exec, or try to execute tests? These waste steps because repo dependencies are often not installed. Remove any files you created (reproduce scripts, debug scripts) with `git checkout -- .` before finalizing.
+
+If any answer reveals a problem, revise your patch now. If the patch is clean and correct, confirm that you are done.

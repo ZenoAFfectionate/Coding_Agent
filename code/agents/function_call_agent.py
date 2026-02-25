@@ -20,6 +20,7 @@ from ..core.agent import Agent
 from ..core.config import Config
 from ..core.llm import HelloAgentsLLM
 from ..core.message import Message
+from ..tools.builtin.finish_tool import FinishTool
 from .prompts import load_agent_prompt
 
 if TYPE_CHECKING:
@@ -222,6 +223,8 @@ class FunctionCallAgent(Agent):
                 }
                 if param.default is not None:
                     properties[param.name]["default"] = param.default
+                if getattr(param, "enum", None):
+                    properties[param.name]["enum"] = param.enum
                 if getattr(param, "required", True):
                     required.append(param.name)
 
@@ -422,9 +425,10 @@ class FunctionCallAgent(Agent):
 
         is_code_error = tool_name == "code_exec" and (has_nonzero_exit or has_traceback)
         is_test_error = tool_name == "test_runner" and ("failed" in low or "error" in low)
+        is_file_error = tool_name == "file" and "error:" in low[:50]
         is_generic_error = has_traceback or has_error_prefix
 
-        if not (is_code_error or is_test_error or is_generic_error):
+        if not (is_code_error or is_test_error or is_file_error or is_generic_error):
             return None
 
         if is_test_error:
@@ -770,6 +774,7 @@ class FunctionCallAgent(Agent):
                     executed = [(*by_id[tc.id], None) for tc in tool_calls]
 
                 # --- Process each result uniformly ---
+                finish_answer = None
                 for call_id, name, raw_args, parsed_args, result, tool_ms in executed:
                     self._print(f"  Tool: {name}({json.dumps(parsed_args, ensure_ascii=False)})")
                     self._track("action", f"{name}({raw_args})", tool=name, step=step)
@@ -781,6 +786,15 @@ class FunctionCallAgent(Agent):
 
                     usage.update(name, parsed_args)
 
+                    # --- Finish tool: early exit ---
+                    if name == "finish" and result.startswith(FinishTool.SENTINEL):
+                        finish_answer = self._strip_think_tags(
+                            result[len(FinishTool.SENTINEL):]
+                        )
+                        self._print(f"  Finish called: {finish_answer}", level="info")
+                        self._track("final_answer", finish_answer)
+                        break
+
                     debug_suffix = self._maybe_debug(debug_state, name, raw_args, result, step)
 
                     messages.append({
@@ -789,6 +803,9 @@ class FunctionCallAgent(Agent):
                         "name": name,
                         "content": self._truncate(result) + debug_suffix,
                     })
+
+                if finish_answer is not None:
+                    return self._end_run(input_text, finish_answer)
 
                 continue  # next loop iteration
 

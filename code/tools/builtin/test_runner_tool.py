@@ -231,8 +231,9 @@ class TestRunnerTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description="Test action: discover (find tests), run (execute tests), coverage (run with coverage).",
+                description="Test action: discover (find tests), run (execute tests), coverage (run with coverage)",
                 required=True,
+                enum=["discover", "run", "coverage"],
             ),
             ToolParameter(
                 name="target",

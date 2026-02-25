@@ -20,8 +20,6 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import networkx as nx
-
 from ...utils.subprocess_utils import safe_run
 from ..base import Tool, ToolParameter, tool_action
 
@@ -74,8 +72,9 @@ class CodeSearchTool(Tool):
     def get_parameters(self) -> List[ToolParameter]:
         return [
             ToolParameter(name="action", type="string",
-                          description="Action: 'search' (grep), 'find_files' (glob), 'ast_search' (structural query), 'find_references' (symbol usages), 'get_structure' (file outline), or 'repo_map' (ranked dependency map)",
-                          required=True),
+                          description="Action to perform",
+                          required=True,
+                          enum=["search", "find_files", "ast_search", "find_references", "get_structure", "repo_map"]),
             ToolParameter(name="pattern", type="string",
                           description="Search pattern (regex for search, glob for find_files)",
                           required=False),
@@ -607,6 +606,11 @@ class CodeSearchTool(Tool):
         query = parameters.get("query")
         max_tokens = parameters.get("max_tokens", 2048) or 2048
 
+        try:
+            import networkx  # noqa: F811
+        except ImportError:
+            return "Error: repo_map requires networkx. Install with: pip install networkx"
+
         graph = self._build_dep_graph(search_path)
         if graph.number_of_nodes() == 0:
             return "No Python files found to build a repository map."
@@ -614,7 +618,7 @@ class CodeSearchTool(Tool):
         ranked = self._rank_graph(graph, query)
         return self._format_map(graph, ranked, max_tokens)
 
-    def _build_dep_graph(self, search_path: Path) -> nx.DiGraph:
+    def _build_dep_graph(self, search_path: Path):
         """Build an inter-file dependency graph from Python files.
 
         Nodes are file paths (relative to workspace). Edges represent:
@@ -624,6 +628,7 @@ class CodeSearchTool(Tool):
 
         Each node stores a list of definitions: (name, type, lineno, signature).
         """
+        import networkx as nx
         graph = nx.DiGraph()
         py_files = self._collect_py_files(search_path, "*.py", limit=500)
 
@@ -718,7 +723,7 @@ class CodeSearchTool(Tool):
                     pass
         return None
 
-    def _rank_graph(self, graph: nx.DiGraph, query: Optional[str] = None) -> List[Tuple[str, float]]:
+    def _rank_graph(self, graph, query: Optional[str] = None) -> List[Tuple[str, float]]:
         """Rank files using PageRank (optionally personalized by query keywords).
 
         Args:
@@ -728,6 +733,7 @@ class CodeSearchTool(Tool):
         Returns:
             Sorted list of (file_path, score), descending by score.
         """
+        import networkx as nx
         if graph.number_of_nodes() == 0:
             return []
 
@@ -755,7 +761,7 @@ class CodeSearchTool(Tool):
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return ranked
 
-    def _format_map(self, graph: nx.DiGraph, ranked_files: List[Tuple[str, float]], max_tokens: int) -> str:
+    def _format_map(self, graph, ranked_files: List[Tuple[str, float]], max_tokens: int) -> str:
         """Format the repository map within a token budget.
 
         Iterates files by rank and emits their definitions (classes with methods,

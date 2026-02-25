@@ -178,11 +178,9 @@ class GitTool(Tool):
             ToolParameter(
                 name="action",
                 type="string",
-                description=(
-                    "Git action to perform: status, diff, log, show, "
-                    "branch, add, commit, stash, blame"
-                ),
+                description="Git action to perform",
                 required=True,
+                enum=["status", "diff", "log", "show", "branch", "add", "commit", "stash", "blame"],
             ),
             ToolParameter(
                 name="files",

@@ -161,11 +161,9 @@ class FileTool(Tool):
         return [
             ToolParameter(
                 name="action", type="string",
-                description=(
-                    "Action: read, write, edit, insert, replace_lines, undo, "
-                    "list_dir, file_info"
-                ),
+                description="Action to perform",
                 required=True,
+                enum=["read", "write", "edit", "insert", "replace_lines", "undo", "list_dir", "file_info"],
             ),
             ToolParameter(name="path", type="string",
                           description="Relative file/directory path", required=True),
@@ -179,7 +177,7 @@ class FileTool(Tool):
                           description="Start line (1-based). Used by read, insert, replace_lines",
                           required=False, default=1),
             ToolParameter(name="end_line", type="integer",
-                          description="End line (inclusive). Used by read, replace_lines",
+                          description="End line (inclusive). If omitted, defaults to start_line + 200 for large files",
                           required=False),
             ToolParameter(name="show_line_numbers", type="boolean",
                           description="Show line numbers in read output (default true)",
@@ -302,7 +300,67 @@ class FileTool(Tool):
 
         count = original.count(old_string)
         if count == 0:
-            return "Error: old_string not found in file."
+            # Attempt whitespace-normalized matching before fuzzy match.
+            # LLMs often omit trailing whitespace or mix tabs/spaces.
+            normalized_original = "\n".join(
+                line.rstrip() for line in original.splitlines()
+            )
+            normalized_old = "\n".join(
+                line.rstrip() for line in old_string.splitlines()
+            )
+            norm_count = normalized_original.count(normalized_old)
+            if norm_count == 1:
+                # Find the exact original text that corresponds to the normalized match
+                orig_lines = original.splitlines(keepends=True)
+                old_lines_stripped = [l.rstrip() for l in old_string.splitlines()]
+                window = len(old_lines_stripped)
+                for i in range(len(orig_lines) - window + 1):
+                    candidate = [l.rstrip() for l in orig_lines[i:i + window]]
+                    if candidate == old_lines_stripped:
+                        # Found the match — use the original (with whitespace) for replacement
+                        actual_old = "".join(orig_lines[i:i + window])
+                        modified = original.replace(actual_old, new_string, 1)
+
+                        try:
+                            self._backup(path)
+                            path.write_text(modified, encoding="utf-8")
+                        except Exception as e:
+                            return f"Error writing file: {e}"
+
+                        rel = parameters.get("path", "")
+                        error = self._validate_and_maybe_revert(path, modified, original, rel)
+                        if error:
+                            return error
+                        diff_text = self._make_diff(original, modified, rel)
+                        return f"Successfully edited {rel} (matched after normalizing trailing whitespace)\n\n{diff_text}"
+
+            # Fuzzy match: find the closest snippet to help the LLM correct its next attempt
+            original_lines = original.splitlines(keepends=True)
+            old_lines = old_string.splitlines(keepends=True)
+            best_ratio = 0.0
+            best_start = 0
+            best_end = 0
+            window = len(old_lines)
+            for i in range(max(0, len(original_lines) - window + 1)):
+                candidate = original_lines[i:i + window]
+                ratio = difflib.SequenceMatcher(
+                    None, old_lines, candidate
+                ).ratio()
+                if ratio > best_ratio:
+                    best_ratio = ratio
+                    best_start = i
+                    best_end = i + window
+            if best_ratio >= 0.5:
+                snippet = "".join(original_lines[best_start:best_end]).rstrip("\n")
+                return (
+                    f"Error: old_string not found in file.\n"
+                    f"Best approximate match (lines {best_start + 1}-{best_end}, "
+                    f"{best_ratio:.0%} similarity):\n{snippet}\n"
+                    f"Tip: Use a shorter, unique snippet (2-5 lines) as old_string, "
+                    f"or use the replace_lines action with start_line={best_start + 1} "
+                    f"and end_line={best_end}."
+                )
+            return "Error: old_string not found in file. Tip: Use a shorter, unique snippet (2-5 lines) or use the replace_lines action with line numbers."
         if count > 1:
             return f"Error: old_string found {count} times. Provide more context to make it unique."
 
@@ -433,6 +491,20 @@ class FileTool(Tool):
         # Ensure last replacement line has a newline if there are lines after it
         if replacement_lines and not replacement_lines[-1].endswith("\n") and end_line < len(lines):
             replacement_lines[-1] += "\n"
+
+        # Safety check: warn if original range contains important lines not in replacement
+        original_block = "".join(lines[start_line - 1:end_line])
+        replacement_block = "".join(replacement_lines)
+        for keyword in ["return ", "return\n", "yield ", "raise "]:
+            if keyword in original_block and keyword not in replacement_block:
+                return (
+                    f"Error: replace_lines would DELETE a '{keyword.strip()}' statement "
+                    f"present in lines {start_line}-{end_line} but absent from your "
+                    f"replacement content. This is almost certainly a mistake. "
+                    f"Use a narrower line range that targets only the line(s) you "
+                    f"want to change, or include the '{keyword.strip()}' statement "
+                    f"in your replacement content."
+                )
 
         new_lines = lines[:start_line - 1] + replacement_lines + lines[end_line:]
         modified = "".join(new_lines)

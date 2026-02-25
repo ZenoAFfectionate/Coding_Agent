@@ -1,7 +1,7 @@
 """
-BFCL 官方评估工具集成模块
+BFCL Official Evaluation Tool Integration Module
 
-封装BFCL官方评估工具的调用，提供便捷的接口
+Wraps the BFCL official evaluation tool calls, providing a convenient interface.
 """
 
 import subprocess
@@ -14,50 +14,50 @@ from ....utils.subprocess_utils import safe_run
 
 
 class BFCLIntegration:
-    """BFCL官方评估工具集成类
-    
-    提供以下功能：
-    1. 检查BFCL评估工具是否已安装
-    2. 安装BFCL评估工具
-    3. 运行BFCL官方评估
-    4. 解析评估结果
-    
-    使用示例：
+    """BFCL Official Evaluation Tool Integration Class
+
+    Provides the following features:
+    1. Check if the BFCL evaluation tool is installed
+    2. Install the BFCL evaluation tool
+    3. Run the BFCL official evaluation
+    4. Parse evaluation results
+
+    Usage example:
         integration = BFCLIntegration()
-        
-        # 检查并安装
+
+        # Check and install
         if not integration.is_installed():
             integration.install()
-        
-        # 运行评估
+
+        # Run evaluation
         integration.run_evaluation(
             model_name="HelloAgents",
             category="simple_python",
             result_file="result/HelloAgents/BFCL_v3_simple_python_result.json"
         )
-        
-        # 解析结果
+
+        # Parse results
         scores = integration.parse_results(
             model_name="HelloAgents",
             category="simple_python"
         )
     """
-    
+
     def __init__(self, project_root: Optional[Union[str, Path]] = None):
-        """初始化BFCL集成
-        
+        """Initialize BFCL integration.
+
         Args:
-            project_root: BFCL项目根目录，如果为None则使用当前目录
+            project_root: BFCL project root directory. If None, uses the current directory.
         """
         self.project_root = Path(project_root) if project_root else Path.cwd()
         self.result_dir = self.project_root / "result"
         self.score_dir = self.project_root / "score"
-    
+
     def is_installed(self) -> bool:
-        """检查BFCL评估工具是否已安装
-        
+        """Check if the BFCL evaluation tool is installed.
+
         Returns:
-            True如果已安装，False否则
+            True if installed, False otherwise.
         """
         try:
             result = safe_run(
@@ -69,16 +69,16 @@ class BFCLIntegration:
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
-    
+
     def install(self) -> bool:
-        """安装BFCL评估工具
-        
+        """Install the BFCL evaluation tool.
+
         Returns:
-            True如果安装成功，False否则
+            True if installation succeeds, False otherwise.
         """
-        print("📦 正在安装BFCL评估工具...")
-        print("   运行: pip install bfcl-eval")
-        
+        print("📦 Installing BFCL evaluation tool...")
+        print("   Running: pip install bfcl-eval")
+
         try:
             result = safe_run(
                 ["pip", "install", "bfcl-eval"],
@@ -86,99 +86,99 @@ class BFCLIntegration:
                 text=True,
                 timeout=300
             )
-            
+
             if result.returncode == 0:
-                print("✅ BFCL评估工具安装成功")
+                print("✅ BFCL evaluation tool installed successfully")
                 return True
             else:
-                print(f"❌ 安装失败: {result.stderr}")
+                print(f"❌ Installation failed: {result.stderr}")
                 return False
-                
+
         except subprocess.TimeoutExpired:
-            print("❌ 安装超时")
+            print("❌ Installation timed out")
             return False
         except Exception as e:
-            print(f"❌ 安装出错: {e}")
+            print(f"❌ Installation error: {e}")
             return False
-    
+
     def prepare_result_file(
         self,
         source_file: Union[str, Path],
         model_name: str,
         category: str
     ) -> Path:
-        """准备BFCL评估所需的结果文件
-        
-        BFCL期望的文件路径格式：
+        """Prepare the result file required for BFCL evaluation.
+
+        BFCL expected file path format:
         result/{model_name}/BFCL_v3_{category}_result.json
-        
+
         Args:
-            source_file: 源结果文件路径
-            model_name: 模型名称
-            category: 评估类别
-            
+            source_file: Source result file path.
+            model_name: Model name.
+            category: Evaluation category.
+
         Returns:
-            目标文件路径
+            Target file path.
         """
         source_file = Path(source_file)
-        
-        # 创建目标目录
+
+        # Create target directory
         target_dir = self.result_dir / model_name
         target_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 确定目标文件名
+
+        # Determine target file name
         target_file = target_dir / f"BFCL_v3_{category}_result.json"
-        
-        # 复制文件
+
+        # Copy file
         if source_file.exists():
             import shutil
             shutil.copy2(source_file, target_file)
-            print(f"✅ 结果文件已准备")
-            print(f"   源文件: {source_file}")
-            print(f"   目标文件: {target_file}")
+            print(f"✅ Result file prepared")
+            print(f"   Source file: {source_file}")
+            print(f"   Target file: {target_file}")
         else:
-            print(f"⚠️ 源文件不存在: {source_file}")
-        
+            print(f"⚠️ Source file does not exist: {source_file}")
+
         return target_file
-    
+
     def run_evaluation(
         self,
         model_name: str,
         category: str,
         result_file: Optional[Union[str, Path]] = None
     ) -> bool:
-        """运行BFCL官方评估
-        
+        """Run the BFCL official evaluation.
+
         Args:
-            model_name: 模型名称
-            category: 评估类别
-            result_file: 结果文件路径（可选，如果提供则先准备文件）
-            
+            model_name: Model name.
+            category: Evaluation category.
+            result_file: Result file path (optional; if provided, the file will be prepared first).
+
         Returns:
-            True如果评估成功，False否则
+            True if evaluation succeeds, False otherwise.
         """
-        # 如果提供了结果文件，先准备
+        # If a result file is provided, prepare it first
         if result_file:
             self.prepare_result_file(result_file, model_name, category)
-        
-        # 设置环境变量
+
+        # Set environment variables
         env = os.environ.copy()
         env["BFCL_PROJECT_ROOT"] = str(self.project_root)
-        
-        print(f"\n🔧 运行BFCL官方评估...")
-        print(f"   模型: {model_name}")
-        print(f"   类别: {category}")
-        print(f"   项目根目录: {self.project_root}")
-        
-        # 构建命令
+
+        print(f"\n🔧 Running BFCL official evaluation...")
+        print(f"   Model: {model_name}")
+        print(f"   Category: {category}")
+        print(f"   Project root: {self.project_root}")
+
+        # Build command
         cmd = [
             "bfcl", "evaluate",
             "--model", model_name,
             "--test-category", category
         ]
-        
-        print(f"   命令: {' '.join(cmd)}")
-        
+
+        print(f"   Command: {' '.join(cmd)}")
+
         try:
             result = safe_run(
                 cmd,
@@ -187,100 +187,99 @@ class BFCLIntegration:
                 timeout=600,
                 env=env
             )
-            
+
             if result.returncode == 0:
-                print("✅ BFCL评估完成")
+                print("✅ BFCL evaluation completed")
                 print(result.stdout)
                 return True
             else:
-                print(f"❌ 评估失败")
-                print(f"   错误信息: {result.stderr}")
+                print(f"❌ Evaluation failed")
+                print(f"   Error message: {result.stderr}")
                 return False
-                
+
         except subprocess.TimeoutExpired:
-            print("❌ 评估超时")
+            print("❌ Evaluation timed out")
             return False
         except Exception as e:
-            print(f"❌ 评估出错: {e}")
+            print(f"❌ Evaluation error: {e}")
             return False
-    
+
     def parse_results(
         self,
         model_name: str,
         category: str
     ) -> Optional[Dict[str, Any]]:
-        """解析BFCL评估结果
-        
+        """Parse BFCL evaluation results.
+
         Args:
-            model_name: 模型名称
-            category: 评估类别
-            
+            model_name: Model name.
+            category: Evaluation category.
+
         Returns:
-            评估结果字典，如果文件不存在则返回None
+            Evaluation result dictionary, or None if the file does not exist.
         """
-        # BFCL评估结果路径
+        # BFCL evaluation result path
         score_file = self.score_dir / model_name / f"BFCL_v3_{category}_score.json"
-        
+
         if not score_file.exists():
-            print(f"⚠️ 评估结果文件不存在: {score_file}")
+            print(f"⚠️ Evaluation result file does not exist: {score_file}")
             return None
-        
+
         try:
             with open(score_file, 'r', encoding='utf-8') as f:
                 results = json.load(f)
-            
-            print(f"\n📊 BFCL评估结果")
-            print(f"   模型: {model_name}")
-            print(f"   类别: {category}")
-            
-            # 提取关键指标
+
+            print(f"\n📊 BFCL Evaluation Results")
+            print(f"   Model: {model_name}")
+            print(f"   Category: {category}")
+
+            # Extract key metrics
             if isinstance(results, dict):
                 for key, value in results.items():
                     if isinstance(value, (int, float)):
                         print(f"   {key}: {value}")
-            
+
             return results
-            
+
         except Exception as e:
-            print(f"❌ 解析结果失败: {e}")
+            print(f"❌ Failed to parse results: {e}")
             return None
-    
+
     def get_summary_csv(self) -> Optional[Path]:
-        """获取汇总CSV文件路径
-        
-        BFCL会生成以下CSV文件：
-        - data_overall.csv: 总体评分
-        - data_live.csv: Live数据集评分
-        - data_non_live.csv: Non-Live数据集评分
-        - data_multi_turn.csv: 多轮对话评分
-        
+        """Get the summary CSV file path.
+
+        BFCL generates the following CSV files:
+        - data_overall.csv: Overall scores
+        - data_live.csv: Live dataset scores
+        - data_non_live.csv: Non-live dataset scores
+        - data_multi_turn.csv: Multi-turn conversation scores
+
         Returns:
-            data_overall.csv的路径，如果不存在则返回None
+            Path to data_overall.csv, or None if it does not exist.
         """
         csv_file = self.score_dir / "data_overall.csv"
-        
+
         if csv_file.exists():
-            print(f"\n📄 汇总CSV文件: {csv_file}")
+            print(f"\n📄 Summary CSV file: {csv_file}")
             return csv_file
         else:
-            print(f"⚠️ 汇总CSV文件不存在: {csv_file}")
+            print(f"⚠️ Summary CSV file does not exist: {csv_file}")
             return None
-    
-    def print_usage_guide(self):
-        """打印使用指南"""
-        print("\n" + "="*60)
-        print("BFCL官方评估工具使用指南")
-        print("="*60)
-        print("\n1. 安装BFCL评估工具：")
-        print("   pip install bfcl-eval")
-        print("\n2. 设置环境变量：")
-        print(f"   export BFCL_PROJECT_ROOT={self.project_root}")
-        print("\n3. 准备结果文件：")
-        print("   将评估结果放在: result/{model_name}/BFCL_v3_{category}_result.json")
-        print("\n4. 运行评估：")
-        print("   bfcl evaluate --model {model_name} --test-category {category}")
-        print("\n5. 查看结果：")
-        print("   评估结果在: score/{model_name}/BFCL_v3_{category}_score.json")
-        print("   汇总结果在: score/data_overall.csv")
-        print("\n" + "="*60)
 
+    def print_usage_guide(self):
+        """Print usage guide."""
+        print("\n" + "="*60)
+        print("BFCL Official Evaluation Tool Usage Guide")
+        print("="*60)
+        print("\n1. Install the BFCL evaluation tool:")
+        print("   pip install bfcl-eval")
+        print("\n2. Set environment variable:")
+        print(f"   export BFCL_PROJECT_ROOT={self.project_root}")
+        print("\n3. Prepare the result file:")
+        print("   Place evaluation results in: result/{model_name}/BFCL_v3_{category}_result.json")
+        print("\n4. Run evaluation:")
+        print("   bfcl evaluate --model {model_name} --test-category {category}")
+        print("\n5. View results:")
+        print("   Evaluation results at: score/{model_name}/BFCL_v3_{category}_score.json")
+        print("   Summary results at: score/data_overall.csv")
+        print("\n" + "="*60)

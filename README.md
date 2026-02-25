@@ -683,7 +683,7 @@ result = search.run({"action": "get_structure", "path": "src/core/agent.py"})
 
 ## Evaluation Benchmarks
 
-The project includes three evaluation suites for measuring agent performance. All evaluations are run through `evaluation.py`.
+The project includes four evaluation suites for measuring agent performance. All evaluations are run through `evaluation.py`.
 
 ### 1. BFCL (Berkeley Function Calling Leaderboard)
 
@@ -715,7 +715,24 @@ python evaluation.py --benchmark gaia --level 2 --max-samples 20
 python evaluation.py --benchmark gaia --lenient --export
 ```
 
-### 3. Data Generation Quality (AIME / LLM Judge)
+### 3. SWE-bench Verified (SWEV)
+
+A curated 500-instance subset of SWE-bench, hand-verified for solvability. Measures an agent's ability to resolve real-world **GitHub issues** by generating code patches.
+
+- **Source:** [princeton-nlp/SWE-bench_Verified](https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified)
+- **Instances:** 500 verified issues from popular Python repos
+- **Metrics:** Resolved rate, exact match, line overlap
+
+```bash
+python evaluation.py --benchmark swev --agent-type react --max-samples 2
+
+python evaluation.py --benchmark swev --agent-type funca --max-samples 2
+
+# Filter by repo
+python evaluation.py --benchmark swev --agent-type react --repo-filter django/django --export
+```
+
+### 4. Data Generation Quality (AIME / LLM Judge)
 
 Evaluates the quality of **AI-generated math problems** using LLM-as-a-judge, with AIME (American Invitational Mathematics Examination) problems as the reference dataset.
 
@@ -737,9 +754,11 @@ python evaluation.py --benchmark data_gen --data-path data/problems.json --judge
 | `--max-samples N` | Limit evaluation to N samples |
 | `--output FILE` | Custom output path for results JSON |
 | `--export` | Also export in the benchmark's official format |
+| `--agent-type TYPE` | Agent type: `react` or `funca` (default: react) |
 | `--workspace DIR` | Agent workspace directory |
 | `--max-iterations N` | Max agent reasoning steps (default: 15) |
 | `--temperature T` | LLM temperature (default: 0.2) |
+| `--split SPLIT` | Dataset split for SWEV (default: test) |
 
 Results are saved to the `results/` directory by default.
 
@@ -802,10 +821,11 @@ CodingAgent/
 │   ├── context/               # Context engineering (cached token counting)
 │   ├── protocols/             # MCP, A2A, ANP
 │   ├── rl/                    # Reinforcement learning
-│   └── evaluation/            # Benchmarks (BFCL, GAIA, Data Generation)
+│   └── evaluation/            # Benchmarks (BFCL, GAIA, SWE-bench, Data Generation)
 │       └── benchmarks/
 │           ├── bfcl/                # Tool calling accuracy evaluation
 │           ├── gaia/                # General AI assistant evaluation
+│           ├── swe/                 # SWE-bench / SWE-bench Verified evaluation
 │           └── data_generation/     # LLM Judge & Win Rate evaluation
 ├── prompts/                   # System & task prompts (for multi-agent workers)
 │   ├── system.prompt                # Shared system prompt
@@ -821,6 +841,7 @@ CodingAgent/
 ├── data/                      # Datasets (downloaded separately)
 │   ├── BFCL/                        # BFCL test data + ground truth
 │   ├── GAIA/                        # GAIA questions + attached files
+│   ├── SWEV/                        # SWE-bench Verified instances (500)
 │   ├── AIME/                        # AIME math problems
 │   ├── KodCode/                     # KodCode dataset
 │   └── xCode/                       # xCode dataset (batch mode input)

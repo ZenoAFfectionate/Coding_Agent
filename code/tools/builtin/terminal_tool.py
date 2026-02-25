@@ -67,22 +67,20 @@ class TerminalTool(Tool):
 
     # 允许的命令白名单（跨平台）
     ALLOWED_COMMANDS = {
-        # 文件列表与信息
+        # File listing and info
         'ls', 'dir', 'tree',
-        # 文件内容查看
+        # File content viewing
         'cat', 'type', 'head', 'tail', 'less', 'more',
-        # 文件搜索
+        # File searching
         'find', 'where', 'grep', 'egrep', 'fgrep', 'findstr',
-        # 文本处理
+        # Text processing
         'wc', 'sort', 'uniq', 'cut', 'awk', 'sed',
-        # 目录操作
+        # Directory navigation
         'pwd', 'cd',
-        # 文件信息
+        # File info
         'file', 'stat', 'du', 'df',
-        # 其他
+        # Misc
         'echo', 'which', 'whereis',
-        # 代码执行
-        'python', 'python3', 'node', 'bash', 'sh', 'powershell', 'cmd',
     }
 
     def __init__(
@@ -95,7 +93,7 @@ class TerminalTool(Tool):
     ):
         super().__init__(
             name="terminal",
-            description="跨平台命令行工具 - 执行安全的文件系统、文本处理和代码执行命令（支持Windows/Linux/Mac）"
+            description="Cross-platform terminal tool - execute safe filesystem, text-processing, and code execution commands (supports Windows/Linux/Mac)"
         )
 
         self.workspace = Path(workspace).resolve()
@@ -128,27 +126,25 @@ class TerminalTool(Tool):
     def run(self, parameters: Dict[str, Any]) -> str:
         """执行工具"""
         if not self.validate_parameters(parameters):
-            return "❌ 参数验证失败"
-        
+            return "Error: parameter validation failed."
+
         command = parameters.get("command", "").strip()
-        
+
         if not command:
-            return "❌ 命令不能为空"
-        
-        # 解析命令
+            return "Error: command cannot be empty."
+
         try:
             parts = shlex.split(command)
         except ValueError as e:
-            return f"❌ 命令解析失败: {e}"
-        
+            return f"Error: failed to parse command: {e}"
+
         if not parts:
-            return "❌ 命令不能为空"
-        
+            return "Error: command cannot be empty."
+
         base_command = parts[0]
-        
-        # 检查命令是否在白名单中
+
         if base_command not in self.ALLOWED_COMMANDS:
-            return f"❌ 不允许的命令: {base_command}\n允许的命令: {', '.join(sorted(self.ALLOWED_COMMANDS))}"
+            return f"Error: command not allowed: {base_command}\nAllowed commands: {', '.join(sorted(self.ALLOWED_COMMANDS))}"
         
         # 特殊处理 cd 命令
         if base_command == 'cd':
@@ -164,8 +160,8 @@ class TerminalTool(Tool):
                 name="command",
                 type="string",
                 description=(
-                    f"要执行的命令（白名单: {', '.join(sorted(list(self.ALLOWED_COMMANDS)[:10]))}...）\n"
-                    "示例: 'ls -la', 'cat file.txt', 'grep pattern *.py', 'head -n 20 data.csv'"
+                    f"Command to execute (whitelist: {', '.join(sorted(list(self.ALLOWED_COMMANDS)[:10]))}...)\n"
+                    "Examples: 'ls -la', 'cat file.txt', 'grep pattern *.py', 'head -n 20 data.csv'"
                 ),
                 required=True
             ),
@@ -174,11 +170,10 @@ class TerminalTool(Tool):
     def _handle_cd(self, parts: List[str]) -> str:
         """处理 cd 命令"""
         if not self.allow_cd:
-            return "❌ cd 命令已禁用"
-        
+            return "Error: cd command is disabled."
+
         if len(parts) < 2:
-            # cd 无参数，返回当前目录
-            return f"当前目录: {self.current_dir}"
+            return f"Current directory: {self.current_dir}"
         
         target_dir = parts[1]
         
@@ -196,18 +191,18 @@ class TerminalTool(Tool):
         try:
             new_dir.relative_to(self.workspace)
         except ValueError:
-            return f"❌ 不允许访问工作目录外的路径: {new_dir}"
+            return f"Error: cannot access path outside workspace: {new_dir}"
         
         # 检查目录是否存在
         if not new_dir.exists():
-            return f"❌ 目录不存在: {new_dir}"
+            return f"Error: directory not found: {new_dir}"
         
         if not new_dir.is_dir():
-            return f"❌ 不是目录: {new_dir}"
+            return f"Error: not a directory: {new_dir}"
         
         # 更新当前目录
         self.current_dir = new_dir
-        return f"✅ 切换到目录: {self.current_dir}"
+        return f"Changed to directory: {self.current_dir}"
     
     def _execute_command(self, command: str) -> str:
         """执行命令"""
@@ -244,18 +239,17 @@ class TerminalTool(Tool):
             # 检查输出大小
             if len(output) > self.max_output_size:
                 output = output[:self.max_output_size]
-                output += f"\n\n⚠️ 输出被截断（超过 {self.max_output_size} 字节）"
+                output += f"\n\n[Warning] Output truncated (exceeded {self.max_output_size} bytes)"
 
-            # 添加返回码信息
             if result.returncode != 0:
-                output = f"⚠️ 命令返回码: {result.returncode}\n\n{output}"
+                output = f"[Warning] Command exit code: {result.returncode}\n\n{output}"
 
-            return output if output else "✅ 命令执行成功（无输出）"
+            return output if output else "Command executed successfully (no output)."
 
         except subprocess.TimeoutExpired:
-            return f"❌ 命令执行超时（超过 {self.timeout} 秒）"
+            return f"Error: command timed out after {self.timeout} seconds."
         except Exception as e:
-            return f"❌ 命令执行失败: {e}"
+            return f"Error: command execution failed: {e}"
 
     def get_current_dir(self) -> str:
         """获取当前工作目录"""

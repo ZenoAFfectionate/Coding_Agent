@@ -236,7 +236,7 @@ class HelloAgentsLLM:
             api_key=self.api_key,
             base_url=self.base_url,
             timeout=self.timeout,
-            max_retries=0,  # Disable retries — each attempt already waits `timeout` seconds
+            max_retries=2,  # Retry on transient failures during long batch evaluations
         )
     
     def _get_default_model(self) -> str:

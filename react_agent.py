@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from tqdm import tqdm
 
 from dotenv import load_dotenv
 
@@ -119,6 +120,7 @@ def build_agent(
     max_reflection_retries: int = 1,
     reflection_prompt: str | None = None,
     enable_planning: bool = False,
+    system_prompt: str | None = None,
 ) -> ReActAgent:
     """Create a fully-equipped single-agent CodingAgent."""
     workspace = str(Path(workspace).resolve())
@@ -145,7 +147,7 @@ def build_agent(
     agent = ReActAgent(
         name="CodingAgent",
         llm=llm,
-        system_prompt=_load_prompt(PROMPTS_DIR / "system.prompt", DEFAULT_SYSTEM_PROMPT),
+        system_prompt=system_prompt or _load_prompt(PROMPTS_DIR / "system.prompt", DEFAULT_SYSTEM_PROMPT),
         tool_registry=registry,
         max_steps=max_iterations,
         config=config,
@@ -312,7 +314,8 @@ def repl(agent: ReActAgent, sandbox_dir: str = None, session_file: str = None) -
 
 def run_batch(agent: ReActAgent, sandbox_dir: str,
               input_path: Path, output_path: Path,
-              start: int = 0, limit: int = None) -> None:
+              start: int = 0, limit: int = None,
+              total_samples: int = 500) -> None:
     """Run the agent on a batch of problems from a JSONL file."""
     if not input_path.exists():
         print(f"Error: input file not found: {input_path}")
@@ -321,13 +324,18 @@ def run_batch(agent: ReActAgent, sandbox_dir: str,
     task_template = _load_prompt(PROMPTS_DIR / "batch_task.prompt", DEFAULT_BATCH_TASK_PROMPT)
 
     total = sum(1 for _ in open(input_path, encoding="utf-8"))
-    header = f"[Batch] Problems: {total}  |  Start: {start}"
-    if limit:
-        header += f"  |  Limit: {limit}"
+    effective_limit = limit or total_samples
+    num_to_process = min(effective_limit, total - start)
+
+    header = f"[Batch] Problems: {total}  |  Start: {start}  |  Target: {num_to_process}"
     print(f"{header}\n[Batch] Output: {output_path}\n")
 
     processed = failed = 0
     open_mode = "a" if start > 0 else "w"
+
+    pbar = tqdm(total=num_to_process, desc="Processing",
+                unit="problem",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
 
     with open(input_path, encoding="utf-8") as fin, \
          open(output_path, open_mode, encoding="utf-8") as fout:
@@ -335,7 +343,7 @@ def run_batch(agent: ReActAgent, sandbox_dir: str,
         for idx, line in enumerate(fin):
             if idx < start:
                 continue
-            if limit and processed >= limit:
+            if processed >= num_to_process:
                 break
 
             line = line.strip()
@@ -348,8 +356,6 @@ def run_batch(agent: ReActAgent, sandbox_dir: str,
             input_output = record.get("input_output", "")
             task_id = record.get("id", f"task_{idx}")
 
-            print(f"{'=' * 60}\n[{idx}/{total}] {task_id}\n{'=' * 60}")
-
             # Clear sandbox for each problem
             for entry in Path(sandbox_dir).iterdir():
                 shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
@@ -359,13 +365,13 @@ def run_batch(agent: ReActAgent, sandbox_dir: str,
             try:
                 response = agent.run(task_template.format(problem=problem))
             except Exception as e:
-                print(f"[Error] Agent failed on {task_id}: {e}")
+                logger.error("Agent failed on %s: %s", task_id, e)
                 response = ""
                 failed += 1
 
             solution = _extract_solution(sandbox_dir, response)
             if not solution:
-                print(f"[Warning] No code extracted for {task_id}")
+                logger.warning("No code extracted for %s", task_id)
                 failed += 1
 
             fout.write(json.dumps({
@@ -376,10 +382,16 @@ def run_batch(agent: ReActAgent, sandbox_dir: str,
             fout.flush()
 
             processed += 1
-            print(f"[Done] {task_id} -- {time.time() - t0:.1f}s -- "
-                  f"{len(solution)} chars\n")
+            elapsed = time.time() - t0
+            pbar.set_postfix(
+                id=task_id[:15],
+                time=f"{elapsed:.1f}s",
+                failed=failed
+            )
+            pbar.update(1)
 
-    print(f"{'=' * 60}")
+    pbar.close()
+    print(f"\n{'=' * 60}")
     print(f"[Batch] Done. Processed: {processed}, Failed: {failed}")
     print(f"[Batch] Results: {output_path}")
     print(f"{'=' * 60}")

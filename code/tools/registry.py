@@ -56,9 +56,10 @@ class ToolRegistry:
                 parameters[key] = val
         return parameters
 
-    def __init__(self):
+    def __init__(self, max_output_chars: int = 0):
         self._tools: dict[str, Tool] = {}
         self._functions: dict[str, dict[str, Any]] = {}
+        self.max_output_chars = max_output_chars  # 0 = no global limit
 
     def register_tool(self, tool: Tool, auto_expand: bool = True):
         """
@@ -122,6 +123,12 @@ class ToolRegistry:
         func_info = self._functions.get(name)
         return func_info["func"] if func_info else None
 
+    def _truncate_output(self, result: str) -> str:
+        """Apply global output truncation if configured."""
+        if self.max_output_chars and isinstance(result, str) and len(result) > self.max_output_chars:
+            return result[:self.max_output_chars] + f"\n... [output truncated at {self.max_output_chars} chars]"
+        return result
+
     def execute_tool(self, name: str, input_text: str) -> str:
         """
         Execute a tool.
@@ -145,14 +152,14 @@ class ToolRegistry:
                         parameters = self._normalize_content_escapes(parameters)
                 except (json.JSONDecodeError, TypeError):
                     parameters = {"input": input_text}
-                return tool.run(parameters)
+                return self._truncate_output(tool.run(parameters))
             except Exception as e:
                 return f"Error: exception while executing tool '{name}': {str(e)}"
 
         elif name in self._functions:
             func = self._functions[name]["func"]
             try:
-                return func(input_text)
+                return self._truncate_output(func(input_text))
             except Exception as e:
                 return f"Error: exception while executing tool '{name}': {str(e)}"
 

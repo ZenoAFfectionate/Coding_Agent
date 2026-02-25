@@ -1,0 +1,23 @@
+## Task: Convert PyTorch Operation to Triton Kernel
+
+### Function Signature
+{func_inputs}
+
+### Description
+{description}
+
+### Mathematical Formula
+{math}
+
+### PyTorch Reference
+{torch_code}
+
+### Example Usage
+{example}
+
+## Requirements
+- Write a Triton kernel that is functionally equivalent to the PyTorch implementation above.
+- Include both the @triton.jit kernel function(s) AND the Python wrapper function with the same signature.
+- Include all necessary imports (torch, triton, triton.language as tl).
+- Save the code as `solution.py` using the file tool.
+- Do NOT include any test code or main blocks.

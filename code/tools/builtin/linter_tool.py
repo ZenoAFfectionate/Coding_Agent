@@ -163,6 +163,7 @@ class LinterTool(Tool):
                 name="action", type="string",
                 description="Action: check (lint), fix (auto-fix), format (code style)",
                 required=True,
+                enum=["check", "fix", "format"],
             ),
             ToolParameter(
                 name="path", type="string",

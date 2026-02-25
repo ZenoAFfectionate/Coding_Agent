@@ -1,7 +1,7 @@
 """
-BFCL 评估指标模块
+BFCL Metrics Module
 
-计算 BFCL 相关的评估指标
+Calculates BFCL-related evaluation metrics.
 """
 
 from typing import Dict, Any, List, Optional
@@ -11,26 +11,26 @@ import numpy as np
 
 
 class BFCLMetrics:
-    """BFCL 评估指标计算器
+    """BFCL Evaluation Metrics Calculator
 
-    计算工具调用相关的评估指标:
-    - 准确率 (Accuracy): 完全正确的比例
-    - AST 匹配度 (AST Match): 抽象语法树匹配度
-    - 参数准确率 (Parameter Accuracy): 参数正确的比例
-    - F1分数: 精确率和召回率的调和平均
-    - 执行成功率: 可执行函数调用的成功率
+    Calculates tool-calling related evaluation metrics:
+    - Accuracy: Proportion of completely correct results
+    - AST Match: Abstract Syntax Tree match score
+    - Parameter Accuracy: Proportion of correct parameters
+    - F1 Score: Harmonic mean of precision and recall
+    - Execution Success Rate: Success rate of executable function calls
     """
 
     @staticmethod
     def calculate_accuracy(predictions: List[Any], references: List[Any]) -> float:
-        """计算准确率
+        """Calculate accuracy.
 
         Args:
-            predictions: 预测结果列表
-            references: 参考答案列表
+            predictions: List of predictions.
+            references: List of reference answers.
 
         Returns:
-            准确率 (0-1)
+            Accuracy (0-1).
         """
         if not predictions or not references:
             return 0.0
@@ -41,44 +41,44 @@ class BFCLMetrics:
 
     @staticmethod
     def calculate_ast_match(predicted: str, expected: str) -> float:
-        """计算 AST 匹配度
+        """Calculate AST match score.
 
         Args:
-            predicted: 预测的函数调用
-            expected: 期望的函数调用
+            predicted: Predicted function call.
+            expected: Expected function call.
 
         Returns:
-            匹配度 (0-1)
+            Match score (0-1).
         """
         try:
-            # 尝试解析为AST
+            # Try to parse as AST
             pred_ast = ast.parse(predicted, mode='eval')
             exp_ast = ast.parse(expected, mode='eval')
 
-            # 比较AST结构
+            # Compare AST structure
             pred_dump = ast.dump(pred_ast)
             exp_dump = ast.dump(exp_ast)
 
             if pred_dump == exp_dump:
                 return 1.0
 
-            # 计算结构相似度
+            # Calculate structural similarity
             similarity = BFCLMetrics._calculate_string_similarity(pred_dump, exp_dump)
             return similarity
 
         except SyntaxError:
-            # 如果无法解析，使用字符串相似度
+            # If parsing fails, use string similarity
             return BFCLMetrics._calculate_string_similarity(predicted, expected)
 
     @staticmethod
     def _calculate_string_similarity(s1: str, s2: str) -> float:
-        """计算字符串相似度（简化版Levenshtein距离）"""
+        """Calculate string similarity (simplified Levenshtein distance)."""
         if s1 == s2:
             return 1.0
         if not s1 or not s2:
             return 0.0
 
-        # 使用集合交集计算相似度
+        # Use set intersection to calculate similarity
         set1 = set(s1.split())
         set2 = set(s2.split())
 
@@ -95,14 +95,14 @@ class BFCLMetrics:
         predicted_params: Dict[str, Any],
         expected_params: Dict[str, Any]
     ) -> float:
-        """计算参数准确率
+        """Calculate parameter accuracy.
 
         Args:
-            predicted_params: 预测的参数
-            expected_params: 期望的参数
+            predicted_params: Predicted parameters.
+            expected_params: Expected parameters.
 
         Returns:
-            参数准确率 (0-1)
+            Parameter accuracy (0-1).
         """
         if not expected_params:
             return 1.0 if not predicted_params else 0.0
@@ -121,60 +121,60 @@ class BFCLMetrics:
 
     @staticmethod
     def _values_match(v1: Any, v2: Any) -> bool:
-        """比较两个值是否匹配"""
-        # 处理数值类型
+        """Compare whether two values match."""
+        # Handle numeric types
         if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
             return abs(v1 - v2) < 1e-6
 
-        # 处理字符串类型
+        # Handle string types
         if isinstance(v1, str) and isinstance(v2, str):
             return v1.strip().lower() == v2.strip().lower()
 
-        # 处理列表类型
+        # Handle list types
         if isinstance(v1, list) and isinstance(v2, list):
             if len(v1) != len(v2):
                 return False
             return all(BFCLMetrics._values_match(a, b) for a, b in zip(v1, v2))
 
-        # 处理字典类型
+        # Handle dict types
         if isinstance(v1, dict) and isinstance(v2, dict):
             if set(v1.keys()) != set(v2.keys()):
                 return False
             return all(BFCLMetrics._values_match(v1[k], v2[k]) for k in v1.keys())
 
-        # 默认使用相等比较
+        # Default to equality comparison
         return v1 == v2
 
     def compute_metrics(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """计算综合指标
+        """Compute comprehensive metrics.
 
         Args:
-            results: 评估结果列表
+            results: List of evaluation results.
 
         Returns:
-            指标字典，包含各种评估指标
+            Metrics dictionary containing various evaluation metrics.
         """
         if not results:
             return self._empty_metrics()
 
         total = len(results)
 
-        # 基础指标
+        # Basic metrics
         success_count = sum(1 for r in results if r.get("success", False))
         accuracy = success_count / total
 
-        # 分数统计
+        # Score statistics
         scores = [r.get("score", 0.0) for r in results]
         avg_score = sum(scores) / len(scores) if scores else 0.0
 
-        # 执行时间统计
+        # Execution time statistics
         execution_times = [r.get("execution_time", 0.0) for r in results if "execution_time" in r]
         avg_execution_time = sum(execution_times) / len(execution_times) if execution_times else 0.0
 
-        # 按类别统计
+        # Per-category statistics
         category_metrics = self._compute_category_metrics(results)
 
-        # 函数调用统计
+        # Function call statistics
         function_call_stats = self._compute_function_call_stats(results)
 
         return {
@@ -189,7 +189,7 @@ class BFCLMetrics:
         }
 
     def _empty_metrics(self) -> Dict[str, Any]:
-        """返回空指标"""
+        """Return empty metrics."""
         return {
             "total_samples": 0,
             "success_count": 0,
@@ -202,7 +202,7 @@ class BFCLMetrics:
         }
 
     def _compute_category_metrics(self, results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """计算分类别指标"""
+        """Compute per-category metrics."""
         categories = {}
 
         for result in results:
@@ -219,7 +219,7 @@ class BFCLMetrics:
                 categories[category]["success"] += 1
             categories[category]["scores"].append(result.get("score", 0.0))
 
-        # 计算每个类别的统计信息
+        # Calculate statistics for each category
         category_metrics = {}
         for category, stats in categories.items():
             accuracy = stats["success"] / stats["total"] if stats["total"] > 0 else 0.0
@@ -235,7 +235,7 @@ class BFCLMetrics:
         return category_metrics
 
     def _compute_function_call_stats(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """计算函数调用统计"""
+        """Compute function call statistics."""
         total_calls = 0
         successful_calls = 0
         function_names = set()
@@ -259,7 +259,7 @@ class BFCLMetrics:
         }
 
     def _compute_score_distribution(self, scores: List[float]) -> Dict[str, Any]:
-        """计算分数分布"""
+        """Compute score distribution."""
         if not scores:
             return {}
 
@@ -278,14 +278,14 @@ class BFCLMetrics:
 
     @staticmethod
     def calculate_f1_score(precision: float, recall: float) -> float:
-        """计算F1分数
+        """Calculate F1 score.
 
         Args:
-            precision: 精确率
-            recall: 召回率
+            precision: Precision.
+            recall: Recall.
 
         Returns:
-            F1分数
+            F1 score.
         """
         if precision + recall == 0:
             return 0.0
@@ -296,14 +296,14 @@ class BFCLMetrics:
         predicted: List[Dict[str, Any]],
         expected: List[Dict[str, Any]]
     ) -> tuple[float, float]:
-        """计算精确率和召回率
+        """Calculate precision and recall.
 
         Args:
-            predicted: 预测的函数调用列表
-            expected: 期望的函数调用列表
+            predicted: List of predicted function calls.
+            expected: List of expected function calls.
 
         Returns:
-            (precision, recall) 元组
+            (precision, recall) tuple.
         """
         if not expected:
             return 1.0 if not predicted else 0.0, 1.0
@@ -311,7 +311,7 @@ class BFCLMetrics:
         if not predicted:
             return 0.0, 0.0
 
-        # 简化版本：基于函数名匹配
+        # Simplified version: based on function name matching
         pred_names = set(call.get("name", "") for call in predicted if isinstance(call, dict))
         exp_names = set(call.get("name", "") for call in expected if isinstance(call, dict))
 
@@ -321,4 +321,3 @@ class BFCLMetrics:
         recall = true_positives / len(exp_names) if exp_names else 0.0
 
         return precision, recall
-

@@ -1,17 +1,18 @@
 """
-BFCL (Berkeley Function Calling Leaderboard) 评估模块
+BFCL (Berkeley Function Calling Leaderboard) Evaluation Module
 
-Berkeley Function Calling Leaderboard 是评估大语言模型工具调用能力的权威基准。
+Berkeley Function Calling Leaderboard is an authoritative benchmark for evaluating
+the tool-calling capabilities of large language models.
 
-主要功能:
-- 数据集加载和处理
-- 工具调用准确性评估
-- 多种调用模式评估(简单、多函数、并行、无关检测)
+Main features:
+- Dataset loading and processing
+- Tool-calling accuracy evaluation
+- Multiple calling mode evaluation (simple, multiple, parallel, irrelevance detection)
 
-参考:
-- 论文: https://arxiv.org/abs/2408.xxxxx
-- 排行榜: https://gorilla.cs.berkeley.edu/leaderboard.html
-- 数据集: https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard
+References:
+- Paper: https://arxiv.org/abs/2408.xxxxx
+- Leaderboard: https://gorilla.cs.berkeley.edu/leaderboard.html
+- Dataset: https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard
 """
 
 from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
@@ -25,4 +26,3 @@ __all__ = [
     "BFCLMetrics",
     "BFCLIntegration",
 ]
-

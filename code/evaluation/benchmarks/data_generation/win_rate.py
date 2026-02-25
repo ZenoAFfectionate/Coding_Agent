@@ -1,34 +1,35 @@
 """
 Win Rate Evaluator
 
-通过成对对比计算胜率
+Computes win rates through pairwise comparisons.
 """
 
 import json
 import time
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
+from tqdm import tqdm
 from code.core.llm import HelloAgentsLLM
 
 
 class WinRateEvaluator:
-    """Win Rate评估器"""
-    
+    """Win Rate evaluator"""
+
     def __init__(
         self,
         llm: Optional[HelloAgentsLLM] = None,
         judge_model: str = "gpt-4o"
     ):
         """
-        初始化Win Rate评估器
-        
+        Initialize the Win Rate evaluator.
+
         Args:
-            llm: LLM实例，如果为None则创建新实例
-            judge_model: 评委模型名称
+            llm: LLM instance; if None, a new instance will be created
+            judge_model: Name of the judge model
         """
         self.llm = llm or HelloAgentsLLM(model=judge_model)
         self.judge_model = judge_model
-        
+
     def compare_pair(
         self,
         problem_a: Dict[str, Any],
@@ -37,31 +38,31 @@ class WinRateEvaluator:
         label_b: str = "B"
     ) -> Dict[str, Any]:
         """
-        对比两个问题，判断哪个更好
-        
+        Compare two problems to determine which is better.
+
         Args:
-            problem_a: 问题A
-            problem_b: 问题B
-            label_a: 问题A的标签
-            label_b: 问题B的标签
-        
+            problem_a: Problem A
+            problem_b: Problem B
+            label_a: Label for problem A
+            label_b: Label for problem B
+
         Returns:
-            对比结果，包含胜者和理由
+            Comparison result containing the winner and reasoning
         """
         start_time = time.time()
-        
-        # 构建对比提示词
+
+        # Build comparison prompt
         prompt = self._build_comparison_prompt(problem_a, problem_b, label_a, label_b)
 
-        # 调用LLM进行对比
+        # Call LLM for comparison
         messages = [{"role": "user", "content": prompt}]
         response = self.llm.invoke(messages)
-        
-        # 解析对比结果
+
+        # Parse comparison result
         winner, reason = self._parse_comparison_response(response, label_a, label_b)
-        
+
         execution_time = time.time() - start_time
-        
+
         return {
             "problem_a_id": problem_a.get("problem_id", "unknown"),
             "problem_b_id": problem_b.get("problem_id", "unknown"),
@@ -70,72 +71,75 @@ class WinRateEvaluator:
             "comparison_text": response,
             "execution_time": execution_time
         }
-    
+
     def evaluate_win_rate(
         self,
         generated_problems: List[Dict[str, Any]],
         reference_problems: List[Dict[str, Any]],
-        num_comparisons: Optional[int] = None
+        num_comparisons: Optional[int] = None,
+        total_samples: int = 500
     ) -> Dict[str, Any]:
         """
-        评估生成数据相对于参考数据的胜率
-        
+        Evaluate the win rate of generated data against reference data.
+
         Args:
-            generated_problems: 生成的问题列表
-            reference_problems: 参考问题列表（如AIME真题）
-            num_comparisons: 对比次数，如果为None则对比所有可能的配对
-        
+            generated_problems: List of generated problems
+            reference_problems: List of reference problems (e.g. AIME real problems)
+            num_comparisons: Number of comparisons; if None, compares all possible pairs
+            total_samples: Total number of samples for progress bar display (default: 500)
+
         Returns:
-            胜率评估结果
+            Win rate evaluation results
         """
-        print(f"\n🏆 开始Win Rate评估")
-        print(f"   评委模型: {self.judge_model}")
-        print(f"   生成数据: {len(generated_problems)} 个")
-        print(f"   参考数据: {len(reference_problems)} 个")
-        
-        # 确定对比次数
+        print(f"\n[Win Rate] Starting evaluation")
+        print(f"   Judge model     : {self.judge_model}")
+        print(f"   Generated data  : {len(generated_problems)} problems")
+        print(f"   Reference data  : {len(reference_problems)} problems")
+
+        # Determine number of comparisons
         if num_comparisons is None:
             num_comparisons = min(len(generated_problems), len(reference_problems))
 
-        # 限制对比次数不超过生成题目数量
-        num_comparisons = min(num_comparisons, len(generated_problems))
+        # Limit comparisons to available generated problems and total_samples
+        num_comparisons = min(num_comparisons, len(generated_problems), total_samples)
 
-        print(f"   对比次数: {num_comparisons}")
+        print(f"   Num comparisons : {num_comparisons}")
 
-        # 随机采样生成题目索引
+        # Randomly sample generated problem indices
         import random
         gen_indices = random.sample(range(len(generated_problems)), num_comparisons)
 
-        print(f"   采样方式: 随机采样")
+        print(f"   Sampling method : Random")
 
-        # 进行成对对比
+        # Perform pairwise comparisons
         comparisons = []
         wins = 0
         losses = 0
         ties = 0
 
+        pbar = tqdm(total=num_comparisons, desc="Comparing",
+                     unit="pair",
+                     bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]")
+
         for i, gen_idx in enumerate(gen_indices):
             gen_problem = generated_problems[gen_idx]
-            # 随机选择一个参考题目
+            # Randomly select a reference problem
             ref_idx = random.randint(0, len(reference_problems) - 1)
             ref_problem = reference_problems[ref_idx]
 
-            print(f"\n   对比进度: {i + 1}/{num_comparisons}")
-            print(f"   生成题目: #{gen_idx + 1}, 参考题目: #{ref_idx + 1}")
-
-            # 随机化题目顺序以避免位置偏向
+            # Randomize problem order to avoid position bias
             if random.random() < 0.5:
-                # Generated在前
+                # Generated first
                 result = self.compare_pair(
                     gen_problem,
                     ref_problem,
                     label_a="Problem A",
                     label_b="Problem B"
                 )
-                # 记录实际顺序
+                # Record actual order
                 result["actual_order"] = {"A": "Generated", "B": "Reference"}
 
-                # 转换winner
+                # Convert winner
                 if result["winner"] == "Problem A":
                     actual_winner = "Generated"
                 elif result["winner"] == "Problem B":
@@ -143,17 +147,17 @@ class WinRateEvaluator:
                 else:
                     actual_winner = "Tie"
             else:
-                # Reference在前
+                # Reference first
                 result = self.compare_pair(
                     ref_problem,
                     gen_problem,
                     label_a="Problem A",
                     label_b="Problem B"
                 )
-                # 记录实际顺序
+                # Record actual order
                 result["actual_order"] = {"A": "Reference", "B": "Generated"}
 
-                # 转换winner
+                # Convert winner
                 if result["winner"] == "Problem A":
                     actual_winner = "Reference"
                 elif result["winner"] == "Problem B":
@@ -164,22 +168,27 @@ class WinRateEvaluator:
             result["actual_winner"] = actual_winner
             comparisons.append(result)
 
-            # 统计胜负
+            # Track wins/losses
             if actual_winner == "Generated":
                 wins += 1
-                print(f"   ✓ Generated胜出")
             elif actual_winner == "Reference":
                 losses += 1
-                print(f"   ✗ Reference胜出")
             else:
                 ties += 1
-                print(f"   = 平局")
-        
-        # 计算胜率
+
+            pbar.set_postfix(
+                W=wins, L=losses, T=ties,
+                wr=f"{wins/(i+1):.0%}"
+            )
+            pbar.update(1)
+
+        pbar.close()
+
+        # Compute win rate
         win_rate = wins / num_comparisons if num_comparisons > 0 else 0
         loss_rate = losses / num_comparisons if num_comparisons > 0 else 0
         tie_rate = ties / num_comparisons if num_comparisons > 0 else 0
-        
+
         metrics = {
             "win_rate": win_rate,
             "loss_rate": loss_rate,
@@ -189,19 +198,19 @@ class WinRateEvaluator:
             "ties": ties,
             "total_comparisons": num_comparisons
         }
-        
-        print(f"\n📊 Win Rate评估结果:")
-        print(f"   胜率: {win_rate:.2%}")
-        print(f"   败率: {loss_rate:.2%}")
-        print(f"   平局率: {tie_rate:.2%}")
-        
+
+        print(f"\n[Results] Win Rate evaluation:")
+        print(f"   Win rate  : {win_rate:.2%}")
+        print(f"   Loss rate : {loss_rate:.2%}")
+        print(f"   Tie rate  : {tie_rate:.2%}")
+
         return {
             "comparisons": comparisons,
             "metrics": metrics,
             "evaluation_date": datetime.now().isoformat(),
             "judge_model": self.judge_model
         }
-    
+
     def _build_comparison_prompt(
         self,
         problem_a: Dict[str, Any],
@@ -209,12 +218,12 @@ class WinRateEvaluator:
         label_a: str,
         label_b: str
     ) -> str:
-        """构建对比提示词"""
-        # 检查是否有solution字段
+        """Build the comparison prompt."""
+        # Check if solution field exists
         has_solution_a = bool(problem_a.get('solution', '').strip())
         has_solution_b = bool(problem_b.get('solution', '').strip())
 
-        # 构建题目展示
+        # Build problem display
         problem_a_text = f"""**{label_a}**
 Problem: {problem_a.get('problem', '')}
 Answer: {problem_a.get('answer', '')}"""
@@ -229,7 +238,7 @@ Answer: {problem_b.get('answer', '')}"""
         if has_solution_b:
             problem_b_text += f"\nSolution: {problem_b.get('solution', '')}"
 
-        # 根据是否有solution调整评估维度
+        # Adjust evaluation criteria based on whether solutions are provided
         if has_solution_a and has_solution_b:
             criteria = """**Evaluation Criteria:**
 Please evaluate comprehensively from the following dimensions:
@@ -271,16 +280,16 @@ Please output your judgment in the following JSON format:
 ```
 """
         return prompt
-    
+
     def _parse_comparison_response(
         self,
         response: str,
         label_a: str,
         label_b: str
     ) -> Tuple[str, str]:
-        """解析对比响应"""
+        """Parse the comparison response."""
         try:
-            # 提取JSON部分
+            # Extract JSON portion
             if "```json" in response:
                 json_str = response.split("```json")[1].split("```")[0].strip()
             elif "```" in response:
@@ -288,35 +297,34 @@ Please output your judgment in the following JSON format:
             else:
                 json_str = response.strip()
 
-            # 修复LaTeX转义问题
+            # Fix LaTeX escape issues
             import re
             try:
                 data = json.loads(json_str)
             except json.JSONDecodeError:
-                # 修复LaTeX转义：将 \frac 转为 \\frac
+                # Fix LaTeX escapes: convert \frac to \\frac etc.
                 fixed_json_str = re.sub(r'(?<!\\)\\(?!["\\/bfnrtu])', r'\\\\', json_str)
                 data = json.loads(fixed_json_str)
-            
+
             winner = data.get("winner", "Tie")
             reason = data.get("reason", "No reason provided")
-            
-            # 验证winner是否有效
+
+            # Validate winner
             if winner not in [label_a, label_b, "Tie"]:
                 winner = "Tie"
-            
+
             return winner, reason
-            
+
         except Exception as e:
-            print(f"⚠️ 解析对比响应失败: {e}")
+            print(f"[Warning] Failed to parse comparison response: {e}")
             return "Tie", "Failed to parse response"
-    
+
     def export_results(
         self,
         results: Dict[str, Any],
         output_path: str
     ):
-        """导出评估结果"""
+        """Export evaluation results."""
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"\n✅ Win Rate结果已保存: {output_path}")
-
+        print(f"\n[Done] Win rate results saved to: {output_path}")

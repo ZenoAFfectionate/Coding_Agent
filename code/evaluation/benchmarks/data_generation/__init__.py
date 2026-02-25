@@ -1,9 +1,9 @@
 """
 Data Generation Evaluation Module
 
-评估数据生成质量的模块，包括：
-- LLM Judge: 使用LLM作为评委评估生成质量
-- Win Rate: 通过对比评估计算胜率
+Module for evaluating data generation quality, including:
+- LLM Judge: Uses an LLM as a judge to evaluate generation quality
+- Win Rate: Computes win rates through pairwise comparisons
 """
 
 from code.evaluation.benchmarks.data_generation.dataset import AIDataset
@@ -15,4 +15,3 @@ __all__ = [
     "LLMJudgeEvaluator",
     "WinRateEvaluator",
 ]
-

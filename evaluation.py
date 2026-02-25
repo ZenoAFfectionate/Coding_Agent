@@ -10,17 +10,26 @@ from dotenv import load_dotenv
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _get_agent_factory(agent_type: str):
+    """Import and return the build_agent function for the chosen agent type."""
+    if agent_type == "funca":
+        from funca_agent import build_agent
+    else:
+        from react_agent import build_agent
+    return build_agent
+
+
 def run_bfcl(args):
-    """Run BFCL (Berkeley Function Calling Leaderboard) evaluation."""
+    """Run BFCL (Berkeley Function Calling Leaderboard) evaluation.
+
+    Uses direct LLM invocation (single-shot) instead of the full ReAct agent
+    loop, which is faster and avoids prompt conflicts for function-calling tasks.
+    """
     from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
     from code.evaluation.benchmarks.bfcl.evaluator import BFCLEvaluator
-    from react_agent import build_agent
+    from code.core.llm import HelloAgentsLLM
 
-    agent = build_agent(
-        workspace=args.workspace,
-        max_iterations=args.max_iterations,
-        temperature=args.temperature,
-    )
+    llm = HelloAgentsLLM(temperature=args.temperature)
 
     dataset = BFCLDataset(
         bfcl_data_dir=args.data_dir or "data/BFCL",
@@ -29,9 +38,10 @@ def run_bfcl(args):
     evaluator = BFCLEvaluator(
         dataset=dataset,
         evaluation_mode=args.eval_mode,
+        llm=llm,
     )
 
-    results = evaluator.evaluate(agent, max_samples=args.max_samples)
+    results = evaluator.evaluate(max_samples=args.max_samples)
 
     # Save results
     output_path = Path(args.output or f"results/bfcl_{args.category or 'all'}_results.json")
@@ -47,16 +57,17 @@ def run_bfcl(args):
 
 
 def run_gaia(args):
-    """Run GAIA (General AI Assistants) evaluation."""
+    """Run GAIA (General AI Assistants) evaluation.
+
+    Uses direct LLM invocation by default, which supports file attachments
+    (text, PDF, Excel, images).  Falls back to a ReAct agent when --agent
+    mode is requested.
+    """
     from code.evaluation.benchmarks.gaia.dataset import GAIADataset
     from code.evaluation.benchmarks.gaia.evaluator import GAIAEvaluator
-    from react_agent import build_agent
+    from code.core.llm import HelloAgentsLLM
 
-    agent = build_agent(
-        workspace=args.workspace,
-        max_iterations=args.max_iterations,
-        temperature=args.temperature,
-    )
+    llm = HelloAgentsLLM(temperature=args.temperature)
 
     dataset = GAIADataset(
         level=args.level,
@@ -64,10 +75,11 @@ def run_gaia(args):
     )
     evaluator = GAIAEvaluator(
         dataset=dataset,
+        llm=llm,
         strict_mode=not args.lenient,
     )
 
-    results = evaluator.evaluate(agent, max_samples=args.max_samples)
+    results = evaluator.evaluate(max_samples=args.max_samples)
 
     # Save results
     level_tag = f"level{args.level}" if args.level else "all"
@@ -83,15 +95,17 @@ def run_gaia(args):
         evaluator.export_to_gaia_format(results, export_path)
 
 
-def run_swe(args):
-    """Run SWE-bench (Software Engineering Benchmark) evaluation."""
+def run_swev(args):
+    """Run SWE-bench Verified evaluation."""
     from code.evaluation.benchmarks.swe.dataset import SWEDataset
     from code.evaluation.benchmarks.swe.evaluator import SWEEvaluator
-    from react_agent import build_agent
 
+    build_agent = _get_agent_factory(args.agent_type)
+
+    split = args.split or "test"
     dataset = SWEDataset(
-        split=args.split,
-        data_dir=args.data_dir or "data/SWE",
+        split=split,
+        data_dir=args.data_dir or "data/SWEV",
         repo_filter=args.repo_filter,
     )
     evaluator = SWEEvaluator(
@@ -100,7 +114,6 @@ def run_swe(args):
         run_tests=args.run_tests,
     )
 
-    # Pass build_agent as factory; evaluator creates a fresh agent per instance
     results = evaluator.evaluate(
         agent_factory=build_agent,
         max_samples=args.max_samples,
@@ -111,17 +124,54 @@ def run_swe(args):
     # Save results
     repo_tag = args.repo_filter.replace("/", "_") if args.repo_filter else "all"
     output_path = Path(
-        args.output or f"results/swe_{args.split}_{repo_tag}_results.json"
+        args.output or f"results/swev_{split}_{repo_tag}_results.json"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2, default=str)
     print(f"\nResults saved to: {output_path}")
 
-    # Export to SWE-bench official submission format
     if args.export:
-        export_path = Path(f"results/swe_{args.split}_{repo_tag}_swe_format.jsonl")
+        export_path = Path(f"results/swev_{split}_{repo_tag}_swe_format.jsonl")
         evaluator.export_to_swe_format(results, export_path)
+
+
+def run_trib(args):
+    """Run TritonBench evaluation (Triton GPU kernel generation)."""
+    from code.evaluation.benchmarks.trib.dataset import TritonBenchDataset
+    from code.evaluation.benchmarks.trib.evaluator import TritonBenchEvaluator
+
+    build_agent = _get_agent_factory(args.agent_type)
+
+    channel = args.channel or "G"
+    dataset = TritonBenchDataset(
+        channel=channel,
+        data_dir=args.data_dir or "data/TRIB",
+        instruction_mode=args.instruction_mode or "simple",
+        difficulty=args.difficulty,
+    )
+    evaluator = TritonBenchEvaluator(
+        dataset=dataset,
+        timeout_per_instance=args.timeout_per_instance,
+    )
+
+    results = evaluator.evaluate(
+        agent_factory=build_agent,
+        max_samples=args.max_samples,
+        max_iterations=args.max_iterations,
+        temperature=args.temperature,
+    )
+
+    # Save results
+    mode_tag = args.instruction_mode or "simple"
+    diff_tag = f"d{args.difficulty}" if args.difficulty else "all"
+    output_path = Path(
+        args.output or f"results/trib_{channel}_{mode_tag}_{diff_tag}_results.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2, default=str)
+    print(f"\nResults saved to: {output_path}")
 
 
 def run_data_gen(args):
@@ -168,11 +218,11 @@ def run_data_gen(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run agent evaluation benchmarks (BFCL, GAIA, SWE-bench, Data Generation)"
+        description="Run agent evaluation benchmarks (BFCL, GAIA, SWE-bench Verified, Data Generation, TritonBench)"
     )
     parser.add_argument(
         "--benchmark", "-b",
-        choices=["bfcl", "gaia", "swe", "data_gen"],
+        choices=["bfcl", "gaia", "swev", "data_gen", "trib"],
         required=True,
         help="Benchmark to run",
     )
@@ -194,8 +244,15 @@ def main():
 
     # Agent configuration
     parser.add_argument("--workspace", "-w", type=str, default=".")
-    parser.add_argument("--max-iterations", type=int, default=15)
-    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--max-iterations", type=int, default=128)
+    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument(
+        "--agent-type",
+        type=str,
+        default="react",
+        choices=["react", "funca"],
+        help="Agent type: react (ReActAgent) or funca (FunctionCallAgent)",
+    )
 
     # BFCL-specific
     parser.add_argument(
@@ -212,7 +269,7 @@ def main():
     parser.add_argument(
         "--data-dir",
         type=str, default=None,
-        help="[BFCL/GAIA/SWE] Data directory path",
+        help="[BFCL/GAIA/SWEV/TRIB] Data directory path",
     )
 
     # GAIA-specific
@@ -245,27 +302,47 @@ def main():
         help="[data_gen] Model name for LLM Judge (default: from .env)",
     )
 
-    # SWE-bench-specific
+    # SWEV-specific
     parser.add_argument(
         "--split",
-        type=str, default="dev",
+        type=str, default=None,
         choices=["dev", "test", "train"],
-        help="[SWE] Dataset split (default: dev)",
+        help="[SWEV] Dataset split (default: test)",
     )
     parser.add_argument(
         "--repo-filter",
         type=str, default=None,
-        help="[SWE] Only evaluate instances from this repo (e.g., django/django)",
+        help="[SWEV] Only evaluate instances from this repo (e.g., django/django)",
     )
     parser.add_argument(
         "--timeout-per-instance",
         type=int, default=600,
-        help="[SWE] Timeout in seconds per instance (default: 600)",
+        help="[SWEV] Timeout in seconds per instance (default: 600)",
     )
     parser.add_argument(
         "--run-tests",
         action="store_true",
-        help="[SWE] Run FAIL_TO_PASS tests for verification (requires repo deps)",
+        help="[SWEV] Run FAIL_TO_PASS tests for verification (requires repo deps)",
+    )
+
+    # TritonBench-specific
+    parser.add_argument(
+        "--channel",
+        type=str, default=None,
+        choices=["G", "T"],
+        help="[TRIB] Evaluation channel: G (GitHub kernels) or T (PyTorch-to-Triton) (default: G)",
+    )
+    parser.add_argument(
+        "--instruction-mode",
+        type=str, default=None,
+        choices=["simple", "complex"],
+        help="[TRIB] Instruction mode for G channel (default: simple)",
+    )
+    parser.add_argument(
+        "--difficulty",
+        type=int, default=None,
+        choices=[1, 2, 3, 4, 5],
+        help="[TRIB] Filter by difficulty level 1-5 (default: all)",
     )
 
     args = parser.parse_args()
@@ -273,8 +350,9 @@ def main():
     dispatch = {
         "bfcl": run_bfcl,
         "gaia": run_gaia,
-        "swe": run_swe,
+        "swev": run_swev,
         "data_gen": run_data_gen,
+        "trib": run_trib,
     }
     dispatch[args.benchmark](args)
 

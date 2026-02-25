@@ -1,0 +1,41 @@
+You are working on the repository: {repo}
+Instance ID: {instance_id}
+
+## GitHub Issue
+
+{problem_statement}
+{hints_section}
+## Your Task
+
+Fix this issue by following the structured workflow below. Do NOT skip steps.
+
+### 1. Understand the Issue
+Re-read the problem statement above. Identify the key symptom (error message, wrong output, unexpected behavior) and any specific files, functions, or classes mentioned.
+
+### 2. Explore the Codebase
+- List the top-level directory to understand the project layout.
+- Navigate to the relevant package directory.
+- Use `code_search` to locate the functions or classes named in the issue.
+
+### 3. Trace the Root Cause
+- Read the files you found. Follow function calls, imports, and class hierarchies to find where the bug actually originates.
+- The root cause is often in a helper or utility function called by the function mentioned in the issue.
+
+### 4. Implement the Fix
+- Edit only the file(s) containing the root cause.
+- Make the minimal change needed to fix the behavior.
+- Do NOT add tests, modify test files, or change documentation.
+
+### Edit Strategy (Critical — Read Carefully)
+- **Always use `file` edit (NOT replace_lines) as your first choice.** The `edit` action matches exact content and is much safer.
+- Use the SHORTEST unique snippet (1-3 lines) as old_string — just the buggy line(s) plus 1 line of context if needed for uniqueness.
+- Do NOT copy entire functions or large blocks as old_string — this causes whitespace mismatches.
+- Only fall back to `replace_lines` if `edit` fails, and target ONLY the specific buggy line(s) (e.g., a 1-3 line range), NOT a wide range.
+- **Do NOT add comments or extra logic.** Change ONLY the buggy value/expression. Aim for a 1-line diff.
+- **After editing, run `git diff` to verify.** If the diff shows only your intended change, call `finish(result="...")` immediately. Do NOT undo a correct edit.
+- Do NOT write reproduce scripts or try to execute code. The repo dependencies may not be installed.
+
+### 5. Verify
+- Re-read the modified file(s) to confirm your patch is clean and minimal.
+- Ensure you have not introduced dead code, unused imports, or unrelated changes.
+- Once you have verified that `git diff` shows only the intended change(s), call `finish(result="<brief summary of your fix>")` immediately. Do NOT continue making tool calls after verification.
