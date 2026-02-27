@@ -229,6 +229,11 @@ class SWEEvaluator:
             # git diff output, so it falsely rejects correct patches and causes
             # the agent to undo its own correct edits.
             factory_kwargs["enable_reflection"] = False
+            # Remove code_exec from the agent's toolset for SWE-bench:
+            # repo dependencies are not installed so code execution will
+            # fail and waste steps.  The evaluator handles test running
+            # separately via _run_tests().
+            factory_kwargs.setdefault("exclude_tools", []).append("code_exec")
             agent = agent_factory(workspace=str(workspace), **factory_kwargs)
 
             # 3. Build prompt
@@ -385,26 +390,27 @@ class SWEEvaluator:
             timeout=60,
         )
 
-        # Attempt to install repo dependencies so tests can run.
-        # Strategy: try multiple approaches since repos vary in their build setup.
-        for install_cmd in [
-            # 1. Try installing just the test extras (fastest if it works)
-            [sys.executable, "-m", "pip", "install", "-e", ".[test]",
-             "--quiet", "--no-build-isolation"],
-            # 2. Fallback: install the repo itself (handles C extensions etc.)
-            [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
-        ]:
-            try:
-                result = subprocess.run(
-                    install_cmd,
-                    cwd=str(workspace),
-                    capture_output=True,
-                    timeout=300,
-                )
-                if result.returncode == 0:
-                    break
-            except Exception:
-                continue
+        # Install repo dependencies only when tests will be executed;
+        # otherwise skip to save time (up to 300s per instance).
+        if self.run_tests:
+            for install_cmd in [
+                # 1. Try installing just the test extras (fastest if it works)
+                [sys.executable, "-m", "pip", "install", "-e", ".[test]",
+                 "--quiet", "--no-build-isolation"],
+                # 2. Fallback: install the repo itself (handles C extensions etc.)
+                [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet"],
+            ]:
+                try:
+                    result = subprocess.run(
+                        install_cmd,
+                        cwd=str(workspace),
+                        capture_output=True,
+                        timeout=300,
+                    )
+                    if result.returncode == 0:
+                        break
+                except Exception:
+                    continue
 
         return workspace
 

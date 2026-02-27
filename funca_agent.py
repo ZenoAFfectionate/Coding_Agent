@@ -123,8 +123,13 @@ def build_agent(
     reflection_prompt: str | None = None,
     enable_planning: bool = False,
     system_prompt: str | None = None,
+    exclude_tools: list[str] | None = None,
 ) -> FunctionCallAgent:
-    """Create a fully-equipped FunctionCallAgent."""
+    """Create a fully-equipped FunctionCallAgent.
+
+    Args:
+        exclude_tools: Tool names to exclude (e.g. ["code_exec", "test_runner"]).
+    """
     workspace = str(Path(workspace).resolve())
     config = Config(debug=debug, temperature=temperature)
     llm = HelloAgentsLLM(
@@ -134,8 +139,9 @@ def build_agent(
         max_tokens=config.max_tokens,
     )
 
-    registry = ToolRegistry()
-    for tool in [
+    exclude = set(exclude_tools or [])
+
+    all_tools = [
         FileTool(workspace=workspace),
         CodeExecutionTool(workspace=workspace, timeout=30),
         CodeSearchTool(workspace=workspace),
@@ -144,8 +150,12 @@ def build_agent(
         LinterTool(workspace=workspace, timeout=30),
         ProfilerTool(workspace=workspace, timeout=60),
         FinishTool(),
-    ]:
-        registry.register_tool(tool)
+    ]
+
+    registry = ToolRegistry()
+    for tool in all_tools:
+        if tool.name not in exclude:
+            registry.register_tool(tool)
 
     agent = FunctionCallAgent(
         name="CodingAgent-FC",

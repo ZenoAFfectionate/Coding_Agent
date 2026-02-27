@@ -1,7 +1,7 @@
 """
-GAIA 评估器模块
+GAIA Evaluator Module
 
-负责评估智能体在 GAIA 基准测试上的表现
+Evaluates agent performance on the GAIA benchmark.
 """
 
 from typing import Dict, Any, List, Optional, Union, Tuple
@@ -31,23 +31,23 @@ def _load_prompt(path: Path, fallback: str | None = None) -> str | None:
 
 
 class GAIAEvaluator:
-    """GAIA 评估器
+    """GAIA Evaluator
 
-    评估智能体的通用AI助手能力,包括:
-    - 问题理解和推理
-    - 多步骤问题解决
-    - 工具使用能力
-    - 答案准确性
+    Evaluates general AI assistant capabilities including:
+    - Question understanding and reasoning
+    - Multi-step problem solving
+    - Tool use ability
+    - Answer accuracy
 
-    GAIA评估采用严格的答案匹配标准:
-    - 精确匹配: 答案完全一致
-    - 部分匹配: 答案包含正确信息但格式不同
+    GAIA evaluation uses strict answer matching criteria:
+    - Exact match: answer is identical
+    - Partial match: answer contains correct information but differs in format
 
     Attributes:
-        dataset: GAIA 数据集
-        metrics: 评估指标计算器
-        level: 难度级别
-        strict_mode: 是否使用严格匹配模式
+        dataset: GAIA dataset
+        metrics: Evaluation metrics calculator
+        level: Difficulty level
+        strict_mode: Whether to use strict matching mode
     """
 
     def __init__(
@@ -58,13 +58,13 @@ class GAIAEvaluator:
         strict_mode: bool = True,
         llm=None,
     ):
-        """初始化 GAIA 评估器
+        """Initialize the GAIA evaluator.
 
         Args:
-            dataset: GAIA 数据集,如果为 None 则自动创建
-            level: 难度级别 (1-3)
-            local_data_dir: 本地数据目录
-            strict_mode: 是否使用严格匹配模式
+            dataset: GAIA dataset; if None, one is created automatically
+            level: Difficulty level (1-3)
+            local_data_dir: Local data directory
+            strict_mode: Whether to use strict matching mode
             llm: Optional HelloAgentsLLM instance for direct LLM mode
                  (bypasses the ReAct agent loop).
         """
@@ -80,39 +80,39 @@ class GAIAEvaluator:
         # Load benchmark-specific prompts
         self.gaia_system_prompt = _load_prompt(EVAL_PROMPTS_DIR / "gaia_system.prompt")
         self.task_template = _load_prompt(EVAL_PROMPTS_DIR / "gaia_task.prompt")
-        
+
     def evaluate(self, agent: Any = None, max_samples: Optional[int] = None) -> Dict[str, Any]:
-        """评估智能体
+        """Run evaluation.
 
         Args:
-            agent: 要评估的智能体 (used only when self.llm is None)
-            max_samples: 最大评估样本数,None表示评估全部
+            agent: Agent to evaluate (used only when self.llm is None)
+            max_samples: Maximum number of samples to evaluate; None means all
 
         Returns:
-            评估结果字典,包含各项指标
+            Evaluation results dict with metrics
         """
         mode_label = "direct LLM" if self.llm else "agent"
         agent_name = getattr(self.llm, 'model', None) or getattr(agent, 'name', 'Unknown')
 
-        print(f"\n🌟 开始 GAIA 评估...")
-        print(f"   模式: {mode_label}")
-        print(f"   模型/智能体: {agent_name}")
-        print(f"   难度级别: {self.level or '全部'}")
-        print(f"   匹配模式: {'严格' if self.strict_mode else '宽松'}")
+        print(f"\n🌟 Starting GAIA evaluation...")
+        print(f"   Mode: {mode_label}")
+        print(f"   Model/Agent: {agent_name}")
+        print(f"   Difficulty level: {self.level or 'all'}")
+        print(f"   Match mode: {'strict' if self.strict_mode else 'lenient'}")
 
-        # 加载数据集
+        # Load dataset
         dataset = self.dataset.load()
         if not dataset:
-            print("   ⚠️ 数据集为空,跳过评估")
+            print("   ⚠️ Dataset is empty, skipping evaluation")
             return self._create_empty_results(agent)
 
-        # 限制样本数量
+        # Limit sample count
         if max_samples:
             dataset = dataset[:max_samples]
 
-        print(f"   样本数量: {len(dataset)}")
+        print(f"   Sample count: {len(dataset)}")
 
-        # 执行评估
+        # Run evaluation
         results = []
         skipped_samples = 0
         level_stats = {1: {"total": 0, "correct": 0, "partial": 0},
@@ -121,7 +121,7 @@ class GAIAEvaluator:
 
         for i, sample in enumerate(dataset):
             if i % 10 == 0:
-                print(f"   进度: {i+1}/{len(dataset)}")
+                print(f"   Progress: {i+1}/{len(dataset)}")
 
             try:
                 sample_result = self.evaluate_sample(agent, sample)
@@ -132,7 +132,7 @@ class GAIAEvaluator:
                     skipped_samples += 1
                     continue
 
-                # 按级别统计
+                # Per-level statistics
                 level = sample.get("level", 1)
                 if level in level_stats:
                     level_stats[level]["total"] += 1
@@ -142,7 +142,7 @@ class GAIAEvaluator:
                         level_stats[level]["partial"] += 1
 
             except Exception as e:
-                print(f"   ⚠️ 样本 {i} 评估失败: {e}")
+                print(f"   ⚠️ Sample {i} evaluation failed: {e}")
                 results.append({
                     "exact_match": False,
                     "partial_match": False,
@@ -152,7 +152,7 @@ class GAIAEvaluator:
                     "score": 0.0
                 })
 
-        # 计算总体指标 (skipped samples excluded from totals)
+        # Calculate overall metrics (skipped samples excluded from totals)
         evaluated_results = [r for r in results if not r.get("skipped")]
         total_samples = len(evaluated_results)
         exact_matches = sum(1 for r in evaluated_results if r["exact_match"])
@@ -161,7 +161,7 @@ class GAIAEvaluator:
         exact_match_rate = exact_matches / total_samples if total_samples > 0 else 0.0
         partial_match_rate = partial_matches / total_samples if total_samples > 0 else 0.0
 
-        # 计算分级指标
+        # Calculate per-level metrics
         level_metrics = {}
         for level, stats in level_stats.items():
             if stats["total"] > 0:
@@ -188,31 +188,31 @@ class GAIAEvaluator:
             "detailed_results": results
         }
 
-        print(f"✅ GAIA 评估完成")
-        print(f"   评估样本: {total_samples} (跳过: {skipped_samples})")
-        print(f"   精确匹配率: {exact_match_rate:.2%}")
-        print(f"   部分匹配率: {partial_match_rate:.2%}")
+        print(f"✅ GAIA evaluation complete")
+        print(f"   Evaluated samples: {total_samples} (skipped: {skipped_samples})")
+        print(f"   Exact match rate: {exact_match_rate:.2%}")
+        print(f"   Partial match rate: {partial_match_rate:.2%}")
         for level_name, metrics in level_metrics.items():
-            print(f"   {level_name}: {metrics['exact_match_rate']:.2%} 精确 / {metrics['partial_match_rate']:.2%} 部分")
+            print(f"   {level_name}: {metrics['exact_match_rate']:.2%} exact / {metrics['partial_match_rate']:.2%} partial")
 
         return final_results
-    
+
     def evaluate_sample(self, agent: Any, sample: Dict[str, Any]) -> Dict[str, Any]:
-        """评估单个样本
+        """Evaluate a single sample.
 
         Uses direct LLM invocation when self.llm is set, otherwise falls back
         to agent.run().  Loads file attachments and includes their content
         in the prompt (text) or as multimodal image blocks (LLM mode only).
 
         Args:
-            agent: 要评估的智能体 (ignored when self.llm is set)
-            sample: 样本数据
+            agent: Agent to evaluate (ignored when self.llm is set)
+            sample: Sample data
 
         Returns:
-            单个样本的评估结果
+            Evaluation result for the single sample
         """
         try:
-            # 准备输入
+            # Prepare input
             question = sample.get("question", "")
             expected_answer = sample.get("final_answer", "")
             level = sample.get("level", 1)
@@ -224,7 +224,7 @@ class GAIAEvaluator:
 
             # Skip unsupported file types
             if file_name and content_type is None and file_content is None:
-                print(f"   ⏭️ 跳过样本 {task_id}: 不支持的文件类型 ({Path(file_name).suffix})")
+                print(f"   ⏭️ Skipping sample {task_id}: unsupported file type ({Path(file_name).suffix})")
                 return {
                     "task_id": task_id,
                     "level": level,
@@ -239,7 +239,10 @@ class GAIAEvaluator:
 
             # Build prompt with file text content (if applicable)
             file_text = file_content if content_type == "text" else None
-            prompt = self._build_prompt(question, sample, file_text=file_text)
+            prompt = self._build_prompt(
+                question, sample, file_text=file_text,
+                image_attached=(content_type == "image"),
+            )
 
             start_time = time.time()
 
@@ -256,7 +259,7 @@ class GAIAEvaluator:
             else:
                 # Agent mode — images not supported (agent.run takes a string)
                 if content_type == "image":
-                    print(f"   ⏭️ 跳过样本 {task_id}: agent模式不支持图片文件")
+                    print(f"   ⏭️ Skipping sample {task_id}: image files not supported in agent mode")
                     return {
                         "task_id": task_id,
                         "level": level,
@@ -272,14 +275,14 @@ class GAIAEvaluator:
 
             execution_time = time.time() - start_time
 
-            # 提取答案
+            # Extract answer
             predicted_answer = self._extract_answer(response)
 
-            # 评估答案
+            # Evaluate answer
             exact_match = self._check_exact_match(predicted_answer, expected_answer)
             partial_match = self._check_partial_match(predicted_answer, expected_answer)
 
-            # 计算分数
+            # Calculate score
             if exact_match:
                 score = 1.0
             elif partial_match:
@@ -312,7 +315,7 @@ class GAIAEvaluator:
             }
 
     def _create_empty_results(self, agent: Any) -> Dict[str, Any]:
-        """创建空的评估结果"""
+        """Create empty evaluation results."""
         agent_name = getattr(self.llm, 'model', None) or getattr(agent, 'name', 'Unknown')
         return {
             "benchmark": "GAIA",
@@ -329,22 +332,31 @@ class GAIAEvaluator:
             "detailed_results": []
         }
 
-    def _build_prompt(self, question: str, sample: Dict[str, Any], file_text: Optional[str] = None) -> str:
-        """构建评估提示
+    def _build_prompt(
+        self,
+        question: str,
+        sample: Dict[str, Any],
+        file_text: Optional[str] = None,
+        image_attached: bool = False,
+    ) -> str:
+        """Build the evaluation prompt.
 
         Uses the gaia_task.prompt template if available, otherwise falls back
         to the original inline format.
 
         Args:
-            question: 问题文本
-            sample: 样本数据
-            file_text: 已加载的文件文本内容 (for text-type attachments)
+            question: Question text
+            sample: Sample data
+            file_text: Pre-loaded file text content (for text-type attachments)
+            image_attached: Whether an image is attached as a multimodal block
         """
         if self.task_template:
             file_section = ""
             if file_text and sample.get("file_name"):
                 file_basename = Path(sample["file_name"]).name
                 file_section = f"\n## Attached File: {file_basename}\n\n{file_text}\n"
+            elif image_attached and sample.get("file_name"):
+                file_section = f"\nAn image file ({Path(sample['file_name']).name}) is attached. Refer to it to answer the question.\n"
             elif sample.get("file_name") and not file_text:
                 file_section = f"\nNote: This question may require reference to the file: {Path(sample['file_name']).name}\n"
             return self.task_template.format(
@@ -358,6 +370,8 @@ class GAIAEvaluator:
         if file_text and sample.get("file_name"):
             file_basename = Path(sample["file_name"]).name
             prompt += f"\n\n## Attached File: {file_basename}\n\n{file_text}"
+        elif image_attached and sample.get("file_name"):
+            prompt += f"\n\nAn image file ({Path(sample['file_name']).name}) is attached. Refer to it to answer the question."
         elif sample.get("file_name") and not file_text:
             prompt += f"\n\nNote: This question may require reference to the file: {Path(sample['file_name']).name}"
 
@@ -376,7 +390,7 @@ class GAIAEvaluator:
 
         path = Path(file_path)
         if not path.exists():
-            print(f"   ⚠️ 文件不存在: {file_path}")
+            print(f"   ⚠️ File not found: {file_path}")
             return None, None
 
         suffix = path.suffix.lower()
@@ -395,7 +409,7 @@ class GAIAEvaluator:
                     content = content[:max_chars] + "\n\n... [truncated]"
                 return "text", content
             except Exception as e:
-                print(f"   ⚠️ 文件读取失败 ({path.name}): {e}")
+                print(f"   ⚠️ Failed to read file ({path.name}): {e}")
                 return None, None
 
         # --- Excel ---
@@ -417,10 +431,10 @@ class GAIAEvaluator:
                     content = content[:max_chars] + "\n\n... [truncated]"
                 return "text", content
             except ImportError:
-                print("   ⚠️ openpyxl未安装, 无法读取Excel文件")
+                print("   ⚠️ openpyxl is not installed; cannot read Excel files")
                 return None, None
             except Exception as e:
-                print(f"   ⚠️ Excel读取失败 ({path.name}): {e}")
+                print(f"   ⚠️ Failed to read Excel file ({path.name}): {e}")
                 return None, None
 
         # --- PDF ---
@@ -453,10 +467,10 @@ class GAIAEvaluator:
                         content = content[:max_chars] + "\n\n... [truncated]"
                     return "text", content
                 except ImportError:
-                    print("   ⚠️ pypdf/PyPDF2未安装, 无法读取PDF文件")
+                    print("   ⚠️ pypdf/PyPDF2 is not installed; cannot read PDF files")
                     return None, None
             except Exception as e:
-                print(f"   ⚠️ PDF读取失败 ({path.name}): {e}")
+                print(f"   ⚠️ Failed to read PDF file ({path.name}): {e}")
                 return None, None
 
         # --- Image ---
@@ -477,11 +491,11 @@ class GAIAEvaluator:
                 data_url = f"data:{mime};base64,{b64}"
                 return "image", data_url
             except Exception as e:
-                print(f"   ⚠️ 图片读取失败 ({path.name}): {e}")
+                print(f"   ⚠️ Failed to read image ({path.name}): {e}")
                 return None, None
 
         # --- Unsupported ---
-        print(f"   ⚠️ 不支持的文件类型: {suffix}")
+        print(f"   ⚠️ Unsupported file type: {suffix}")
         return None, None
 
     def _build_multimodal_messages(self, prompt: str, image_data_url: str, file_name: str) -> List[Dict]:
@@ -504,23 +518,21 @@ class GAIAEvaluator:
         }]
 
     def _extract_answer(self, response: str) -> str:
-        """从响应中提取答案（GAIA格式）
+        """Extract the answer from the response (GAIA format).
 
-        GAIA要求答案格式为：FINAL ANSWER: [答案]
+        GAIA requires the answer format: FINAL ANSWER: [answer]
         """
-        # 首先尝试提取GAIA官方格式的答案
+        # First try to extract the official GAIA format answer
         final_answer_pattern = r'FINAL ANSWER:\s*(.+?)(?:\n|$)'
         match = re.search(final_answer_pattern, response, re.IGNORECASE | re.MULTILINE)
         if match:
             answer = match.group(1).strip()
-            # 移除可能的方括号
+            # Remove possible brackets
             answer = answer.strip('[]')
             return answer
 
-        # 备用方案：查找其他答案标记
+        # Fallback: look for other answer markers
         answer_patterns = [
-            r'答案[：:]\s*(.+)',
-            r'最终答案[：:]\s*(.+)',
             r'Final answer[：:]\s*(.+)',
             r'Answer[：:]\s*(.+)',
         ]
@@ -530,7 +542,7 @@ class GAIAEvaluator:
             if match:
                 return match.group(1).strip()
 
-        # 如果没有找到标记，返回最后一个非空行
+        # If no marker found, return the last non-empty line
         lines = response.strip().split('\n')
         for line in reversed(lines):
             line = line.strip()
@@ -540,85 +552,85 @@ class GAIAEvaluator:
         return response.strip()
 
     def _check_exact_match(self, predicted: str, expected: str) -> bool:
-        """检查精确匹配"""
+        """Check for exact match."""
         if not predicted or not expected:
             return False
 
-        # 标准化字符串
+        # Normalize strings
         pred_normalized = self._normalize_answer(predicted)
         exp_normalized = self._normalize_answer(expected)
 
         return pred_normalized == exp_normalized
 
     def _check_partial_match(self, predicted: str, expected: str) -> bool:
-        """检查部分匹配"""
+        """Check for partial match."""
         if not predicted or not expected:
             return False
 
-        # 标准化字符串
+        # Normalize strings
         pred_normalized = self._normalize_answer(predicted)
         exp_normalized = self._normalize_answer(expected)
 
-        # 检查包含关系
+        # Check containment
         if exp_normalized in pred_normalized or pred_normalized in exp_normalized:
             return True
 
-        # 检查关键词匹配
+        # Check keyword overlap
         pred_words = set(pred_normalized.split())
         exp_words = set(exp_normalized.split())
 
         if not exp_words:
             return False
 
-        # 如果超过70%的期望词汇出现在预测中，认为部分匹配
+        # If over 70% of expected words appear in the prediction, consider it a partial match
         overlap = len(pred_words & exp_words)
         return overlap / len(exp_words) >= 0.7
 
     def _normalize_answer(self, answer: str) -> str:
-        """标准化答案字符串（GAIA官方标准化规则）
+        """Normalize answer string (GAIA official normalization rules).
 
-        根据GAIA论文的标准化规则：
-        1. 数字：移除逗号分隔符和单位符号
-        2. 字符串：移除冠词、转小写、移除多余空格
-        3. 列表：按逗号分隔，每个元素独立标准化
+        Based on the GAIA paper's normalization rules:
+        1. Numbers: remove comma separators and unit symbols
+        2. Strings: remove articles, lowercase, remove extra whitespace
+        3. Lists: split by comma, normalize each element independently
         """
         if not answer:
             return ""
 
         answer = answer.strip()
 
-        # 检查是否是逗号分隔的列表
+        # Check if it's a comma-separated list
         if ',' in answer:
-            # 分隔并标准化每个元素
+            # Split and normalize each element
             parts = [self._normalize_single_answer(p.strip()) for p in answer.split(',')]
-            # 按字母顺序排序（GAIA要求）
+            # Sort alphabetically (GAIA requirement)
             parts.sort()
             return ','.join(parts)
         else:
             return self._normalize_single_answer(answer)
 
     def _normalize_single_answer(self, answer: str) -> str:
-        """标准化单个答案（不包含逗号的答案）"""
+        """Normalize a single answer (without commas)."""
         answer = answer.strip().lower()
 
-        # 移除常见的冠词
+        # Remove common articles
         articles = ['the', 'a', 'an']
         words = answer.split()
         if words and words[0] in articles:
             words = words[1:]
             answer = ' '.join(words)
 
-        # 移除货币符号和百分号
+        # Remove currency symbols and percent signs
         answer = answer.replace('$', '').replace('%', '').replace('€', '').replace('£', '')
 
-        # 移除数字中的逗号分隔符（如 1,000 -> 1000）
-        # 但保留小数点
+        # Remove comma separators in numbers (e.g. 1,000 -> 1000)
+        # but keep decimal points
         answer = re.sub(r'(\d),(\d)', r'\1\2', answer)
 
-        # 移除多余空格
+        # Remove extra whitespace
         answer = ' '.join(answer.split())
 
-        # 移除末尾的标点符号
+        # Remove trailing punctuation
         answer = answer.rstrip('.,;:!?')
 
         return answer
@@ -629,16 +641,16 @@ class GAIAEvaluator:
         output_path: Union[str, Path],
         include_reasoning: bool = True
     ) -> None:
-        """导出为GAIA官方格式
+        """Export results to GAIA official format.
 
-        GAIA格式要求：
-        - JSONL格式（每行一个JSON对象）
-        - 每个对象包含：task_id, model_answer, reasoning_trace（可选）
+        GAIA format requires:
+        - JSONL format (one JSON object per line)
+        - Each object contains: task_id, model_answer, reasoning_trace (optional)
 
         Args:
-            results: 评估结果
-            output_path: 输出文件路径
-            include_reasoning: 是否包含推理轨迹
+            results: Evaluation results
+            output_path: Output file path
+            include_reasoning: Whether to include reasoning traces
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -657,8 +669,7 @@ class GAIAEvaluator:
 
                 f.write(json.dumps(gaia_result, ensure_ascii=False) + '\n')
 
-        print(f"✅ GAIA格式结果已导出")
-        print(f"   输出文件: {output_path}")
-        print(f"   样本数: {len(detailed_results)}")
-        print(f"   包含推理轨迹: {include_reasoning}")
-
+        print(f"✅ GAIA format results exported")
+        print(f"   Output file: {output_path}")
+        print(f"   Samples: {len(detailed_results)}")
+        print(f"   Include reasoning traces: {include_reasoning}")

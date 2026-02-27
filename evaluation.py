@@ -43,6 +43,15 @@ def run_bfcl(args):
 
     results = evaluator.evaluate(max_samples=args.max_samples)
 
+    # Print summary
+    print(f"\n{'='*60}")
+    print(f"  BFCL Results — {args.category or 'all'}")
+    print(f"  Overall accuracy: {results.get('overall_accuracy', 0):.2%}"
+          f"  ({results.get('correct_samples', 0)}/{results.get('total_samples', 0)})")
+    for cat, m in results.get("category_metrics", {}).items():
+        print(f"    {cat}: {m['accuracy']:.2%} ({m['correct']}/{m['total']})")
+    print(f"{'='*60}")
+
     # Save results
     output_path = Path(args.output or f"results/bfcl_{args.category or 'all'}_results.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,7 +80,7 @@ def run_gaia(args):
 
     dataset = GAIADataset(
         level=args.level,
-        local_data_dir=args.data_dir or "data/gaia",
+        local_data_dir=args.data_dir or "data/GAIA",
     )
     evaluator = GAIAEvaluator(
         dataset=dataset,
@@ -81,8 +90,17 @@ def run_gaia(args):
 
     results = evaluator.evaluate(max_samples=args.max_samples)
 
-    # Save results
+    # Print summary
     level_tag = f"level{args.level}" if args.level else "all"
+    print(f"\n{'='*60}")
+    print(f"  GAIA Results — {level_tag}")
+    total = results.get("total_samples", 0)
+    exact = results.get("exact_matches", results.get("correct_samples", 0))
+    acc = exact / total if total > 0 else 0
+    print(f"  Accuracy: {acc:.2%} ({exact}/{total})")
+    print(f"{'='*60}")
+
+    # Save results
     output_path = Path(args.output or f"results/gaia_{level_tag}_results.json")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -121,8 +139,17 @@ def run_swev(args):
         temperature=args.temperature,
     )
 
-    # Save results
+    # Print summary
     repo_tag = args.repo_filter.replace("/", "_") if args.repo_filter else "all"
+    print(f"\n{'='*60}")
+    print(f"  SWE-bench Results — {split} / {repo_tag} / {args.agent_type}")
+    total = results.get("total_samples", 0)
+    resolved = results.get("resolved", results.get("correct_samples", 0))
+    rate = resolved / total if total > 0 else 0
+    print(f"  Resolved rate: {rate:.2%} ({resolved}/{total})")
+    print(f"{'='*60}")
+
+    # Save results
     output_path = Path(
         args.output or f"results/swev_{split}_{repo_tag}_results.json"
     )
@@ -162,9 +189,20 @@ def run_trib(args):
         temperature=args.temperature,
     )
 
-    # Save results
+    # Print summary
     mode_tag = args.instruction_mode or "simple"
     diff_tag = f"d{args.difficulty}" if args.difficulty else "all"
+    print(f"\n{'='*60}")
+    print(f"  TritonBench Results — {channel}/{mode_tag}/{diff_tag} / {args.agent_type}")
+    total = results.get("total_samples", 0)
+    call_acc = results.get("call_accuracy", 0)
+    exec_acc = results.get("execution_accuracy", 0)
+    print(f"  Call accuracy:      {call_acc:.2%}" if isinstance(call_acc, float) else f"  Call accuracy:      {call_acc}")
+    print(f"  Execution accuracy: {exec_acc:.2%}" if isinstance(exec_acc, float) else f"  Execution accuracy: {exec_acc}")
+    print(f"  Total samples: {total}")
+    print(f"{'='*60}")
+
+    # Save results
     output_path = Path(
         args.output or f"results/trib_{channel}_{mode_tag}_{diff_tag}_results.json"
     )
@@ -207,6 +245,14 @@ def run_data_gen(args):
             print(f"  Progress: {i+1}/{len(problems)}")
         result = evaluator.evaluate_single(problem)
         results.append(result)
+
+    # Print summary
+    total = len(results)
+    avg_score = sum(r.get("score", 0) for r in results) / total if total > 0 else 0
+    print(f"\n{'='*60}")
+    print(f"  Data Generation Results")
+    print(f"  Total: {total} | Avg. score: {avg_score:.2f}")
+    print(f"{'='*60}")
 
     # Save results
     output_path = Path(args.output or "results/data_gen_judge_results.json")

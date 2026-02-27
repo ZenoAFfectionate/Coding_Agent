@@ -1,0 +1,486 @@
+============================================================
+  Coding Agent — Experiment Suite
+  Started at: 2026-02-26 17:43:42
+  Output file: experiments_output.txt
+============================================================
+
+================================================================
+  [1/4] BFCL — Function Calling Accuracy
+================================================================
+
+--- BFCL: simple_python ---
+   ✓ Loaded test data: BFCL_v4_simple_python.json (400 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_python.json (400 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_python
+   Sample count: 400
+   Ground truth count: 400
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_simple_python.json (400 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_python.json (400 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_python
+   Sample count: 400
+   Ground truth count: 400
+   Sample count: 400
+
+✅ BFCL evaluation completed
+   Overall accuracy: 93.25%
+   unknown: 93.25% (373/400)
+
+Results saved to: results/bfcl_simple_python_results.json
+
+
+--- BFCL: simple_java ---
+   ✓ Loaded test data: BFCL_v4_simple_java.json (100 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_java.json (100 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_java
+   Sample count: 100
+   Ground truth count: 100
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_simple_java.json (100 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_java.json (100 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_java
+   Sample count: 100
+   Ground truth count: 100
+   Sample count: 100
+
+✅ BFCL evaluation completed
+   Overall accuracy: 79.00%
+   unknown: 79.00% (79/100)
+
+Results saved to: results/bfcl_simple_java_results.json
+
+
+--- BFCL: simple_javascript ---
+   ✓ Loaded test data: BFCL_v4_simple_javascript.json (50 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_javascript.json (50 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_javascript
+   Sample count: 50
+   Ground truth count: 50
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_simple_javascript.json (50 samples)
+   ✓ Loaded ground truth: BFCL_v4_simple_javascript.json (50 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: simple_javascript
+   Sample count: 50
+   Ground truth count: 50
+   Sample count: 50
+
+✅ BFCL evaluation completed
+   Overall accuracy: 70.00%
+   unknown: 70.00% (35/50)
+
+Results saved to: results/bfcl_simple_javascript_results.json
+
+
+--- BFCL: multiple ---
+   ✓ Loaded test data: BFCL_v4_multiple.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multiple.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multiple
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_multiple.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multiple.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multiple
+   Sample count: 200
+   Ground truth count: 200
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 93.50%
+   unknown: 93.50% (187/200)
+
+Results saved to: results/bfcl_multiple_results.json
+
+
+--- BFCL: parallel ---
+   ✓ Loaded test data: BFCL_v4_parallel.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_parallel.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: parallel
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_parallel.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_parallel.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: parallel
+   Sample count: 200
+   Ground truth count: 200
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 91.50%
+   unknown: 91.50% (183/200)
+
+Results saved to: results/bfcl_parallel_results.json
+
+
+--- BFCL: parallel_multiple ---
+   ✓ Loaded test data: BFCL_v4_parallel_multiple.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_parallel_multiple.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: parallel_multiple
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_parallel_multiple.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_parallel_multiple.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: parallel_multiple
+   Sample count: 200
+   Ground truth count: 200
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 89.00%
+   unknown: 89.00% (178/200)
+
+Results saved to: results/bfcl_parallel_multiple_results.json
+
+
+--- BFCL: irrelevance ---
+   ✓ Loaded test data: BFCL_v4_irrelevance.json (240 samples)
+   ⚠️ Ground truth file does not exist: data/BFCL/possible_answer/BFCL_v4_irrelevance.json
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: irrelevance
+   Sample count: 240
+   Ground truth count: 0
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_irrelevance.json (240 samples)
+   ⚠️ Ground truth file does not exist: data/BFCL/possible_answer/BFCL_v4_irrelevance.json
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: irrelevance
+   Sample count: 240
+   Ground truth count: 0
+   Sample count: 240
+
+✅ BFCL evaluation completed
+   Overall accuracy: 84.17%
+   unknown: 84.17% (202/240)
+
+Results saved to: results/bfcl_irrelevance_results.json
+
+
+--- BFCL: live_simple ---
+   ✓ Loaded test data: BFCL_v4_live_simple.json (258 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_simple.json (258 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_simple
+   Sample count: 258
+   Ground truth count: 258
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_live_simple.json (258 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_simple.json (258 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_simple
+   Sample count: 258
+   Ground truth count: 258
+   Sample count: 258
+
+✅ BFCL evaluation completed
+   Overall accuracy: 81.78%
+   unknown: 81.78% (211/258)
+
+Results saved to: results/bfcl_live_simple_results.json
+
+
+--- BFCL: live_multiple ---
+   ✓ Loaded test data: BFCL_v4_live_multiple.json (1053 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_multiple.json (1053 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_multiple
+   Sample count: 1053
+   Ground truth count: 1053
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_live_multiple.json (1053 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_multiple.json (1053 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_multiple
+   Sample count: 1053
+   Ground truth count: 1053
+   Sample count: 1053
+
+✅ BFCL evaluation completed
+   Overall accuracy: 79.30%
+   unknown: 79.30% (835/1053)
+
+Results saved to: results/bfcl_live_multiple_results.json
+
+
+--- BFCL: live_parallel ---
+   ✓ Loaded test data: BFCL_v4_live_parallel.json (16 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_parallel.json (16 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_parallel
+   Sample count: 16
+   Ground truth count: 16
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_live_parallel.json (16 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_parallel.json (16 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_parallel
+   Sample count: 16
+   Ground truth count: 16
+   Sample count: 16
+
+✅ BFCL evaluation completed
+   Overall accuracy: 87.50%
+   unknown: 87.50% (14/16)
+
+Results saved to: results/bfcl_live_parallel_results.json
+
+
+--- BFCL: live_parallel_multiple ---
+   ✓ Loaded test data: BFCL_v4_live_parallel_multiple.json (24 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_parallel_multiple.json (24 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_parallel_multiple
+   Sample count: 24
+   Ground truth count: 24
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_live_parallel_multiple.json (24 samples)
+   ✓ Loaded ground truth: BFCL_v4_live_parallel_multiple.json (24 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: live_parallel_multiple
+   Sample count: 24
+   Ground truth count: 24
+   Sample count: 24
+
+✅ BFCL evaluation completed
+   Overall accuracy: 83.33%
+   unknown: 83.33% (20/24)
+
+Results saved to: results/bfcl_live_parallel_multiple_results.json
+
+
+--- BFCL: multi_turn_base ---
+   ✓ Loaded test data: BFCL_v4_multi_turn_base.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_base.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_base
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_multi_turn_base.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_base.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_base
+   Sample count: 200
+   Ground truth count: 200
+   Multi-turn: yes (4 turns per sample)
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 3.00%
+   unknown: 3.00% (6/200)
+
+============================================================
+  BFCL Results — multi_turn_base
+  Overall accuracy: 3.00%  (6/200)
+    unknown: 3.00% (6/200)
+============================================================
+
+Results saved to: results/bfcl_multi_turn_base_results.json
+
+--- BFCL: multi_turn_miss_func ---
+INFO:openai._base_client:Retrying request to /chat/completions in 0.472617 seconds
+   ✓ Loaded test data: BFCL_v4_multi_turn_miss_func.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_miss_func.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_miss_func
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_multi_turn_miss_func.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_miss_func.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_miss_func
+   Sample count: 200
+   Ground truth count: 200
+   Multi-turn: yes (5 turns per sample)
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 0.00%
+   unknown: 0.00% (0/200)
+
+============================================================
+  BFCL Results — multi_turn_miss_func
+  Overall accuracy: 0.00%  (0/200)
+    unknown: 0.00% (0/200)
+============================================================
+
+Results saved to: results/bfcl_multi_turn_miss_func_results.json
+
+
+--- BFCL: multi_turn_miss_param ---
+   ✓ Loaded test data: BFCL_v4_multi_turn_miss_param.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_miss_param.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_miss_param
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_multi_turn_miss_param.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_miss_param.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_miss_param
+   Sample count: 200
+   Ground truth count: 200
+   Multi-turn: yes (5 turns per sample)
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 0.00%
+   unknown: 0.00% (0/200)
+
+============================================================
+  BFCL Results — multi_turn_miss_param
+  Overall accuracy: 0.00%  (0/200)
+    unknown: 0.00% (0/200)
+============================================================
+
+
+Results saved to: results/bfcl_multi_turn_miss_param_results.json
+
+--- BFCL: multi_turn_long_context ---
+   ✓ Loaded test data: BFCL_v4_multi_turn_long_context.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_long_context.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_long_context
+   Sample count: 200
+   Ground truth count: 200
+
+🔧 Starting BFCL evaluation...
+   Mode: direct LLM
+   Model / Agent: Qwen/Qwen3.5-35B-A3B
+   Evaluation mode: ast
+   Category: All
+   ✓ Loaded test data: BFCL_v4_multi_turn_long_context.json (200 samples)
+   ✓ Loaded ground truth: BFCL_v4_multi_turn_long_context.json (200 samples)
+✅ BFCL dataset loaded successfully
+   Data directory: data/BFCL
+   Category: multi_turn_long_context
+   Sample count: 200
+   Ground truth count: 200
+   Multi-turn: yes (4 turns per sample)
+   Sample count: 200
+
+✅ BFCL evaluation completed
+   Overall accuracy: 2.00%
+   unknown: 2.00% (4/200)
+
+============================================================
+  BFCL Results — multi_turn_long_context
+  Overall accuracy: 2.00%  (4/200)
+    unknown: 2.00% (4/200)
+============================================================
+
+Results saved to: results/bfcl_multi_turn_long_context_results.json

@@ -8,6 +8,7 @@ from typing import Dict, Any, List, Optional, Union
 import json
 import ast
 import logging
+import sys
 import time
 from pathlib import Path
 from code.evaluation.benchmarks.bfcl.dataset import BFCLDataset
@@ -17,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 # Evaluation prompts directory (benchmark-specific prompts)
 EVAL_PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
+
+_MULTI_TURN_TOOL_SYSTEM_PROMPT = (
+    "You are a helpful assistant. Use the provided tools to complete the user's tasks."
+)
 
 
 def _load_prompt(path: Path, fallback: str | None = None) -> str | None:
@@ -111,6 +116,15 @@ class BFCLEvaluator:
         if max_samples:
             dataset = dataset[:max_samples]
 
+        # Detect multi-turn mode
+        is_multi_turn = False
+        if dataset:
+            q = dataset[0].get("question", "")
+            if isinstance(q, list) and q and isinstance(q[0], list):
+                is_multi_turn = True
+                num_turns = len(q)
+                print(f"   Multi-turn: yes ({num_turns} turns per sample)")
+
         print(f"   Sample count: {len(dataset)}")
 
         # Run evaluation
@@ -118,15 +132,21 @@ class BFCLEvaluator:
         categories = {}
         total = len(dataset)
         bar_width = 30
+        is_tty = sys.stdout.isatty()
 
         for i, sample in enumerate(dataset):
-            # Print progress bar
             done = i + 1
-            filled = int(bar_width * done / total)
-            bar = "█" * filled + "░" * (bar_width - filled)
-            pct = done / total * 100
             correct_so_far = sum(1 for r in results if r.get("success"))
-            print(f"\r   [{bar}] {done}/{total} ({pct:.0f}%) | ✓ {correct_so_far}", end="", flush=True)
+
+            if is_tty:
+                # Interactive terminal: overwrite progress bar in place
+                filled = int(bar_width * done / total)
+                bar = "█" * filled + "░" * (bar_width - filled)
+                pct = done / total * 100
+                print(f"\r   [{bar}] {done}/{total} ({pct:.0f}%) | ✓ {correct_so_far}", end="", flush=True)
+            elif done % 10 == 0 or done == total:
+                # Non-TTY (piped/redirected): print periodic one-line updates
+                print(f"   Progress: {done}/{total} | correct: {correct_so_far}")
 
             try:
                 sample_result = self.evaluate_sample(agent, sample)
@@ -201,9 +221,13 @@ class BFCLEvaluator:
         Returns:
             Evaluation result for a single sample.
         """
+        # Detect multi-turn samples: question is List[List[Dict]]
+        question = sample.get("question", "")
+        if isinstance(question, list) and question and isinstance(question[0], list):
+            return self._evaluate_multi_turn_sample(sample)
+
         try:
-            # Prepare input
-            question = sample.get("question", "")
+            # Prepare input (single-turn)
             functions = sample.get("function", [])
             ground_truth = sample.get("ground_truth", [])
 
@@ -254,6 +278,346 @@ class BFCLEvaluator:
                 "sample_id": sample.get("id", ""),
                 "category": self.category if self.category else sample.get("category", "unknown")
             }
+
+    # ------------------------------------------------------------------
+    # Multi-turn evaluation
+    # ------------------------------------------------------------------
+
+    # Mapping from BFCL class names to function-doc filenames
+    _CLASS_TO_DOC_FILE = {
+        "GorillaFileSystem": "gorilla_file_system.json",
+        "MathAPI": "math_api.json",
+        "MessageAPI": "message_api.json",
+        "TicketAPI": "ticket_api.json",
+        "TradingBot": "trading_bot.json",
+        "TravelAPI": "travel_booking.json",
+        "TwitterAPI": "posting_api.json",
+        "VehicleControlAPI": "vehicle_control.json",
+    }
+
+    @staticmethod
+    def _convert_bfcl_schema(schema: dict) -> dict:
+        """Recursively convert a BFCL parameter schema to OpenAI JSON Schema."""
+        if not isinstance(schema, dict):
+            return schema
+
+        out = dict(schema)
+
+        # Type mappings
+        t = out.get("type")
+        if t == "dict":
+            out["type"] = "object"
+        elif t == "float":
+            out["type"] = "number"
+
+        # Array without items
+        if out.get("type") == "array" and "items" not in out:
+            out["items"] = {"type": "string"}
+
+        # Recurse into properties
+        if "properties" in out:
+            out["properties"] = {
+                k: BFCLEvaluator._convert_bfcl_schema(v)
+                for k, v in out["properties"].items()
+            }
+
+        # Recurse into items
+        if "items" in out and isinstance(out["items"], dict):
+            out["items"] = BFCLEvaluator._convert_bfcl_schema(out["items"])
+
+        return out
+
+    def _bfcl_to_openai_tools(self, func_docs: List[Dict]) -> List[Dict]:
+        """Convert BFCL func_doc list to OpenAI tool-calling schema."""
+        tools = []
+        for doc in func_docs:
+            params = doc.get("parameters", {})
+            converted = self._convert_bfcl_schema(params)
+            # Strip the "response" field if present — not part of OpenAI schema
+            func_schema = {
+                "name": doc.get("name", ""),
+                "description": doc.get("description", ""),
+                "parameters": converted,
+            }
+            tools.append({"type": "function", "function": func_schema})
+        return tools
+
+    @staticmethod
+    def _build_func_param_lookup(func_docs: List[Dict]) -> Dict[str, List[str]]:
+        """Build ``{func_name: [param1, param2, ...]}`` from func_docs.
+
+        Python 3.7+ preserves dict insertion order, so the parameter order
+        matches BFCL's declaration order.
+        """
+        lookup: dict[str, list[str]] = {}
+        for doc in func_docs:
+            name = doc.get("name", "")
+            props = doc.get("parameters", {}).get("properties", {})
+            lookup[name] = list(props.keys())
+        return lookup
+
+    @staticmethod
+    def _normalize_call_to_keyword_args(
+        call_str: str,
+        func_params_lookup: Dict[str, List[str]],
+    ) -> str:
+        """Convert positional args to keyword args in a function-call string.
+
+        E.g. ``sort('file.pdf')`` with lookup ``{"sort": ["file_name"]}``
+        becomes ``sort(file_name='file.pdf')``.
+        """
+        try:
+            tree = ast.parse(call_str, mode="eval")
+        except SyntaxError:
+            return call_str
+
+        node = tree.body
+        if not isinstance(node, ast.Call):
+            return call_str
+
+        # Determine function name
+        if isinstance(node.func, ast.Name):
+            func_name = node.func.id
+        elif isinstance(node.func, ast.Attribute):
+            func_name = node.func.attr
+        else:
+            return call_str
+
+        param_names = func_params_lookup.get(func_name)
+        if param_names is None:
+            return call_str
+
+        # Convert positional args to keyword args
+        new_keywords = list(node.keywords)  # existing keywords
+        for idx, arg in enumerate(node.args):
+            if idx < len(param_names):
+                new_keywords.append(ast.keyword(arg=param_names[idx], value=arg))
+
+        node.args = []
+        node.keywords = new_keywords
+
+        return ast.unparse(tree)
+
+    def _evaluate_multi_turn_sample(self, sample: Dict[str, Any]) -> Dict[str, Any]:
+        """Evaluate a multi-turn BFCL sample using native tool calling.
+
+        Multi-turn samples have:
+          - question: List[List[Dict]]  (turns of user messages)
+          - ground_truth: List[List[str]]  (per-turn function-call strings)
+          - involved_classes / path / excluded_function instead of 'function'
+        """
+        turns = sample["question"]                    # List[List[message_dict]]
+        ground_truth = sample.get("ground_truth", [])  # List[List[str]]
+
+        # Load function definitions from multi_turn_func_doc/
+        functions = self._load_multi_turn_functions(sample)
+
+        # Convert to OpenAI tools and build param lookup for AST normalisation
+        tools = self._bfcl_to_openai_tools(functions)
+        func_params_lookup = self._build_func_param_lookup(functions)
+
+        conversation: list[dict] = [
+            {"role": "system", "content": _MULTI_TURN_TOOL_SYSTEM_PROMPT},
+        ]
+
+        turn_results = []
+        all_correct = True
+        start_time = time.time()
+
+        for turn_idx, turn_messages in enumerate(turns):
+            turn_gt = ground_truth[turn_idx] if turn_idx < len(ground_truth) else []
+
+            # If the turn has no user messages (e.g. miss_func re-introduction)
+            if not turn_messages:
+                if not turn_gt:
+                    turn_results.append({
+                        "turn": turn_idx, "predicted": [],
+                        "expected": [], "success": True, "score": 1.0,
+                    })
+                    continue
+                conversation.append({
+                    "role": "user",
+                    "content": (
+                        "The previously unavailable function(s) are now available. "
+                        "Please execute any pending operations from earlier requests."
+                    ),
+                })
+            else:
+                for msg in turn_messages:
+                    conversation.append({
+                        "role": msg.get("role", "user"),
+                        "content": msg.get("content", ""),
+                    })
+
+            # Call the LLM with native tool calling
+            try:
+                response = self.llm.invoke_with_tools(
+                    list(conversation), tools,
+                )
+            except Exception as e:
+                turn_results.append({
+                    "turn": turn_idx, "predicted": [],
+                    "expected": turn_gt, "success": False,
+                    "score": 0.0, "error": str(e),
+                })
+                all_correct = False
+                conversation.append({"role": "assistant", "content": ""})
+                continue
+
+            # Extract tool calls from the response
+            message = response.choices[0].message
+            tool_calls = message.tool_calls
+
+            if tool_calls:
+                # Parse each tool call into the standard dict format
+                predicted_calls = []
+                for tc in tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    predicted_calls.append({
+                        "name": tc.function.name,
+                        "arguments": args,
+                    })
+
+                # Append assistant message with tool_calls to conversation
+                conversation.append(message.model_dump())
+
+                # Append simulated tool results for each call
+                for tc in tool_calls:
+                    conversation.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": json.dumps({
+                            "status": "success",
+                            "result": "Operation completed.",
+                        }),
+                    })
+            else:
+                # Model returned text, no tool calls
+                predicted_calls = []
+                content = message.content or ""
+                conversation.append({"role": "assistant", "content": content})
+
+            # Compare against this turn's ground truth
+            if turn_gt:
+                turn_success, turn_score = self._evaluate_string_format(
+                    predicted_calls, turn_gt,
+                    func_params_lookup=func_params_lookup,
+                )
+            else:
+                turn_success = len(predicted_calls) == 0
+                turn_score = 1.0 if turn_success else 0.0
+
+            turn_results.append({
+                "turn": turn_idx,
+                "predicted": predicted_calls,
+                "expected": turn_gt,
+                "success": turn_success,
+                "score": turn_score,
+            })
+            if not turn_success:
+                all_correct = False
+
+        execution_time = time.time() - start_time
+        total_score = (
+            sum(r["score"] for r in turn_results) / len(turn_results)
+            if turn_results else 0.0
+        )
+
+        # Log per-sample multi-turn summary (non-TTY only to avoid clobbering progress bar)
+        if not sys.stdout.isatty():
+            sample_id = sample.get("id", "?")
+            turn_marks = "".join(
+                "+" if r["success"] else "-" for r in turn_results
+            )
+            print(f"      [{sample_id}] turns: [{turn_marks}] score: {total_score:.2f}")
+
+        return {
+            "success": all_correct,
+            "score": total_score,
+            "predicted": [r["predicted"] for r in turn_results],
+            "expected": ground_truth,
+            "turn_results": turn_results,
+            "execution_time": execution_time,
+            "sample_id": sample.get("id", ""),
+            "category": self.category or sample.get("category", "unknown"),
+        }
+
+    def _load_multi_turn_functions(self, sample: Dict[str, Any]) -> List[Dict]:
+        """Load function definitions for a multi-turn sample.
+
+        Reads JSONL files from ``data/BFCL/multi_turn_func_doc/`` based on the
+        sample's ``involved_classes``, filtering out ``excluded_function`` entries.
+        """
+        involved_classes = sample.get("involved_classes", [])
+        excluded = set(sample.get("excluded_function", []))
+
+        func_doc_dir = self.dataset.bfcl_data_dir / "multi_turn_func_doc"
+
+        functions: list[dict] = []
+        for cls_name in involved_classes:
+            doc_file = self._CLASS_TO_DOC_FILE.get(cls_name)
+            if not doc_file:
+                logger.warning("No doc file mapping for class: %s", cls_name)
+                continue
+            doc_path = func_doc_dir / doc_file
+            if not doc_path.exists():
+                logger.warning("Doc file not found: %s", doc_path)
+                continue
+
+            with open(doc_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        func_def = json.loads(line)
+                        func_name = func_def.get("name", "")
+                        if func_name not in excluded:
+                            functions.append(func_def)
+                    except json.JSONDecodeError:
+                        continue
+
+        return functions
+
+    def _build_multi_turn_system_prompt(self, functions: List[Dict]) -> str:
+        """Build a system prompt listing available functions for multi-turn evaluation."""
+        if not functions:
+            return ""
+
+        prompt = (
+            "You are a function-calling assistant. For each user request, "
+            "output ONLY a valid JSON array of function calls to execute. "
+            "No explanation, no markdown fences, no extra text.\n\n"
+            "Output format:\n"
+            '[{"name": "<function_name>", "arguments": {"<param>": "<value>"}}, ...]\n\n'
+            "If no function call is needed, output: []\n\n"
+            "## Available Functions\n\n"
+        )
+
+        for func in functions:
+            func_name = func.get("name", "")
+            func_desc = func.get("description", "")
+            func_params = func.get("parameters", {})
+
+            prompt += f"### {func_name}\n"
+            if func_desc:
+                prompt += f"{func_desc}\n"
+            if func_params:
+                properties = func_params.get("properties", {})
+                required = func_params.get("required", [])
+                if properties:
+                    prompt += "Parameters:\n"
+                    for pname, pinfo in properties.items():
+                        req_marker = " (required)" if pname in required else ""
+                        ptype = pinfo.get("type", "any")
+                        pdesc = pinfo.get("description", "")
+                        prompt += f"  - {pname} ({ptype}{req_marker}): {pdesc}\n"
+            prompt += "\n"
+
+        return prompt
 
     def _create_empty_results(self, agent: Any) -> Dict[str, Any]:
         """Create empty evaluation results."""
@@ -574,8 +938,16 @@ class BFCLEvaluator:
 
         return True
 
-    def _evaluate_string_format(self, predicted: List[Dict], expected: List[str]) -> tuple[bool, float]:
+    def _evaluate_string_format(
+        self,
+        predicted: List[Dict],
+        expected: List[str],
+        func_params_lookup: Optional[Dict[str, List[str]]] = None,
+    ) -> tuple[bool, float]:
         """Evaluate string format ground truth (legacy)."""
+        if func_params_lookup is None:
+            func_params_lookup = {}
+
         # Convert predicted results to string form
         predicted_strs = []
         for call in predicted:
@@ -598,7 +970,7 @@ class BFCLEvaluator:
         matches = 0
         for pred_str in predicted_strs:
             for exp_str in expected:
-                if self._ast_strings_match(pred_str, exp_str):
+                if self._ast_strings_match(pred_str, exp_str, func_params_lookup):
                     matches += 1
                     break
 
@@ -607,15 +979,29 @@ class BFCLEvaluator:
 
         return success, score
 
-    def _ast_strings_match(self, pred: str, expected: str) -> bool:
-        """Compare whether two function call strings match at the AST level."""
+    def _ast_strings_match(
+        self,
+        pred: str,
+        expected: str,
+        func_params_lookup: Optional[Dict[str, List[str]]] = None,
+    ) -> bool:
+        """Compare whether two function call strings match at the AST level.
+
+        When *func_params_lookup* is supplied, both strings are first
+        normalised so that positional args become keyword args.
+        """
+        if func_params_lookup is None:
+            func_params_lookup = {}
+
+        if func_params_lookup:
+            pred = self._normalize_call_to_keyword_args(pred, func_params_lookup)
+            expected = self._normalize_call_to_keyword_args(expected, func_params_lookup)
+
         try:
-            # Try to parse as AST and compare
             pred_ast = ast.parse(pred, mode='eval')
             exp_ast = ast.parse(expected, mode='eval')
             return ast.dump(pred_ast) == ast.dump(exp_ast)
-        except:
-            # If AST parsing fails, use string comparison
+        except Exception:
             return pred.strip() == expected.strip()
 
     def _evaluate_execution(self, predicted: List[Dict], expected: List[str], functions: List[Dict]) -> tuple[bool, float]:

@@ -21,6 +21,7 @@ from ..core.config import Config
 from ..core.llm import HelloAgentsLLM
 from ..core.message import Message
 from ..tools.builtin.finish_tool import FinishTool
+from ..tools.builtin.escalate_tool import EscalateTool
 from .prompts import load_agent_prompt
 
 if TYPE_CHECKING:
@@ -49,6 +50,63 @@ class _DebugState:
     error_summary: str = ""
     failed_action: str = ""
     attempts: int = 0
+
+
+@dataclass
+class _CircuitBreakerState:
+    """Track repeated failures to auto-terminate stuck workers."""
+    consecutive_errors: int = 0
+    debug_exhaustions: int = 0
+    last_error_types: list[str] = field(default_factory=list)
+    tools_called: list[str] = field(default_factory=list)
+    errors_seen: list[str] = field(default_factory=list)
+
+    _MAX_WINDOW: int = 5  # rolling window for error type tracking
+
+    def record_success(self) -> None:
+        self.consecutive_errors = 0
+
+    def record_error(self, error_type: str, summary: str) -> None:
+        self.consecutive_errors += 1
+        self.last_error_types.append(error_type)
+        if len(self.last_error_types) > self._MAX_WINDOW:
+            self.last_error_types = self.last_error_types[-self._MAX_WINDOW:]
+        if summary and summary not in self.errors_seen[-3:]:
+            self.errors_seen.append(summary)
+
+    def record_debug_exhaustion(self) -> None:
+        self.debug_exhaustions += 1
+
+    def record_tool_call(self, tool_name: str) -> None:
+        self.tools_called.append(tool_name)
+
+    def is_tripped(self) -> tuple[bool, str]:
+        """Check if the circuit breaker should trip.
+
+        Returns (tripped, reason).
+        """
+        if self.consecutive_errors >= 5:
+            return True, f"5+ consecutive tool errors ({self.consecutive_errors})"
+        if self.debug_exhaustions >= 2:
+            return True, f"debug loop exhausted {self.debug_exhaustions} times"
+        if len(self.last_error_types) >= 3:
+            from collections import Counter
+            counts = Counter(self.last_error_types)
+            for etype, count in counts.items():
+                if count >= 3:
+                    return True, f"same error type '{etype}' appeared {count} times in last {len(self.last_error_types)} errors"
+        return False, ""
+
+    def progress_summary(self) -> str:
+        """Build a summary of what happened for the orchestrator."""
+        parts = []
+        if self.tools_called:
+            from collections import Counter
+            tc = Counter(self.tools_called)
+            parts.append("Tools called: " + ", ".join(f"{k}({v}x)" for k, v in tc.most_common()))
+        if self.errors_seen:
+            parts.append("Errors seen: " + "; ".join(self.errors_seen[-5:]))
+        return " | ".join(parts) if parts else "No activity recorded"
 
 
 @dataclass
@@ -624,6 +682,7 @@ class FunctionCallAgent(Agent):
         reflection_attempts = 0
         usage = _UsageState()
         debug_state = _DebugState()
+        cb_state = _CircuitBreakerState()
 
         if self.trajectory is not None:
             self.trajectory.reset()
@@ -685,10 +744,25 @@ class FunctionCallAgent(Agent):
 
         # --- Agent loop ---
         final_response = ""
+        _budget_warned = False
 
         while step < iterations_limit:
             step += 1
             self._print(f"\n[FUNCA: step {step}]")
+
+            # --- Step budget warning ---
+            budget_threshold = max(1, int(iterations_limit * 0.75))
+            if step == budget_threshold and not _budget_warned:
+                _budget_warned = True
+                remaining = iterations_limit - step
+                budget_msg = (
+                    f"[STEP BUDGET WARNING] You have used {step}/{iterations_limit} steps "
+                    f"({remaining} remaining). Focus on producing a final, verified result. "
+                    "If your current approach is not converging, call `finish` with the "
+                    "best answer you have so far."
+                )
+                messages.append({"role": "user", "content": budget_msg})
+                self._print(f"  {budget_msg}", level="info")
 
             # --- Context budget management ---
             messages = self._manage_context_budget(messages)
@@ -791,11 +865,41 @@ class FunctionCallAgent(Agent):
                         finish_answer = self._strip_think_tags(
                             result[len(FinishTool.SENTINEL):]
                         )
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": result,
+                        })
                         self._print(f"  Finish called: {finish_answer}", level="info")
                         self._track("final_answer", finish_answer)
                         break
 
+                    # --- Escalate tool: return to orchestrator ---
+                    if name == "escalate" and result.startswith(EscalateTool.SENTINEL):
+                        escalate_reason = result[len(EscalateTool.SENTINEL):]
+                        escalate_msg = f"[ESCALATED] {escalate_reason}"
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": name,
+                            "content": result,
+                        })
+                        self._print(f"  Escalated: {escalate_reason}", level="info")
+                        self._track("escalated", escalate_reason)
+                        return self._end_run(input_text, escalate_msg, reason="escalated")
+
                     debug_suffix = self._maybe_debug(debug_state, name, raw_args, result, step)
+
+                    # --- Circuit breaker state update ---
+                    cb_state.record_tool_call(name)
+                    error_info = self._classify_observation(name, result)
+                    if error_info:
+                        cb_state.record_error(error_info["error_type"], error_info["summary"])
+                    else:
+                        cb_state.record_success()
+                    if "Debug loop exhausted" in debug_suffix:
+                        cb_state.record_debug_exhaustion()
 
                     messages.append({
                         "role": "tool",
@@ -806,6 +910,17 @@ class FunctionCallAgent(Agent):
 
                 if finish_answer is not None:
                     return self._end_run(input_text, finish_answer)
+
+                # --- Circuit breaker check ---
+                tripped, trip_reason = cb_state.is_tripped()
+                if tripped:
+                    abort_msg = (
+                        f"[Circuit breaker tripped: {trip_reason}] "
+                        f"Progress: {cb_state.progress_summary()}"
+                    )
+                    self._print(f"  {abort_msg}", level="info")
+                    self._track("circuit_breaker", abort_msg, step=step)
+                    return self._end_run(input_text, abort_msg, reason="circuit_breaker")
 
                 continue  # next loop iteration
 
@@ -838,6 +953,7 @@ class FunctionCallAgent(Agent):
         if not final_response:
             self._print("  Max steps reached. Forcing final answer.", level="info")
             self._track("error", "Max steps reached without finding answer")
+            progress = cb_state.progress_summary()
             try:
                 final_choice = self.llm.invoke_with_tools(
                     messages,
@@ -850,6 +966,7 @@ class FunctionCallAgent(Agent):
                 )
             except Exception:
                 final_response = "Unable to complete the task within the allowed number of steps."
+            final_response += f"\n\n[Max steps exhausted. {progress}]"
 
         return self._end_run(
             input_text, final_response,

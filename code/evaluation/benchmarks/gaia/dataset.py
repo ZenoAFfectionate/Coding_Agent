@@ -1,7 +1,7 @@
 """
-GAIA 数据集加载模块
+GAIA Dataset Loading Module
 
-负责从 HuggingFace 加载 GAIA (General AI Assistants) 数据集
+Loads the GAIA (General AI Assistants) dataset from HuggingFace or local files.
 """
 
 from typing import List, Dict, Any, Optional, Union
@@ -10,23 +10,24 @@ import json
 
 
 class GAIADataset:
-    """GAIA 数据集加载器
+    """GAIA Dataset Loader
 
-    从 HuggingFace 加载 GAIA 数据集,支持不同难度级别。
+    Loads the GAIA dataset from HuggingFace, supporting different difficulty levels.
 
-    GAIA是一个通用AI助手评估基准,包含466个真实世界问题,
-    需要推理、多模态处理、网页浏览和工具使用等能力。
+    GAIA is a general AI assistant evaluation benchmark containing 466 real-world
+    questions that require reasoning, multimodal processing, web browsing, and
+    tool-use capabilities.
 
-    难度级别:
-    - Level 1: 简单问题 (0步推理, 直接回答)
-    - Level 2: 中等问题 (1-5步推理, 需要简单工具使用)
-    - Level 3: 复杂问题 (5+步推理, 需要复杂工具链和多步推理)
+    Difficulty levels:
+    - Level 1: Simple questions (0-step reasoning, direct answer)
+    - Level 2: Medium questions (1-5 step reasoning, simple tool use)
+    - Level 3: Complex questions (5+ step reasoning, complex tool chains)
 
     Attributes:
-        dataset_name: HuggingFace 数据集名称
-        split: 数据集分割(validation/test)
-        level: 难度级别
-        data: 加载的数据列表
+        dataset_name: HuggingFace dataset name
+        split: Dataset split (validation/test)
+        level: Difficulty level
+        data: Loaded data list
     """
 
     def __init__(
@@ -36,13 +37,13 @@ class GAIADataset:
         level: Optional[int] = None,
         local_data_dir: Optional[Union[str, Path]] = None
     ):
-        """初始化 GAIA 数据集加载器
+        """Initialize the GAIA dataset loader.
 
         Args:
-            dataset_name: HuggingFace 数据集名称
-            split: 数据集分割 (validation/test)
-            level: 难度级别 (1-3),None表示加载所有级别
-            local_data_dir: 本地数据目录路径
+            dataset_name: HuggingFace dataset name
+            split: Dataset split (validation/test)
+            level: Difficulty level (1-3), None to load all levels
+            local_data_dir: Local data directory path
         """
         self.dataset_name = dataset_name
         self.split = split
@@ -52,71 +53,127 @@ class GAIADataset:
         self._is_local = self._check_if_local_source()
 
     def _check_if_local_source(self) -> bool:
-        """检查是否使用本地数据源"""
+        """Check whether to use a local data source."""
         if self.local_data_dir and self.local_data_dir.exists():
             return True
         return False
 
     def load(self) -> List[Dict[str, Any]]:
-        """加载数据集
+        """Load the dataset.
 
         Returns:
-            数据集列表,每个元素包含问题、答案、难度等
+            List of dataset items, each containing question, answer, difficulty, etc.
         """
         if self._is_local:
             self.data = self._load_from_local()
         else:
             self.data = self._load_from_huggingface()
 
-        # 按级别过滤
+        # Filter by level
         if self.level is not None:
             self.data = [item for item in self.data if item.get("level") == self.level]
 
-        print(f"✅ GAIA数据集加载完成")
-        print(f"   数据源: {self.dataset_name}")
-        print(f"   分割: {self.split}")
-        print(f"   级别: {self.level or '全部'}")
-        print(f"   样本数: {len(self.data)}")
+        print(f"✅ GAIA dataset loaded")
+        print(f"   Source: {self.dataset_name}")
+        print(f"   Split: {self.split}")
+        print(f"   Level: {self.level or 'all'}")
+        print(f"   Samples: {len(self.data)}")
 
         return self.data
 
     def _load_from_local(self) -> List[Dict[str, Any]]:
-        """从本地加载数据集"""
+        """Load dataset from local files (supports parquet and JSON formats)."""
         data = []
 
         if not self.local_data_dir or not self.local_data_dir.exists():
-            print("   ⚠️ 本地数据目录不存在")
+            print("   ⚠️ Local data directory does not exist")
             return data
 
-        # 查找JSON文件
-        json_files = list(self.local_data_dir.glob("*.json"))
-        json_files.extend(self.local_data_dir.glob("**/*.json"))
+        # Prefer parquet format (default for HuggingFace snapshot_download)
+        split_dir = self.local_data_dir / self.split
+        if split_dir.exists():
+            parquet_file = split_dir / "metadata.parquet"
+            if parquet_file.exists():
+                return self._load_parquet(parquet_file, split_dir)
 
-        # 过滤GAIA相关文件
-        gaia_files = [f for f in json_files if "gaia" in f.name.lower()]
+        # Fallback: look for parquet in root directory
+        parquet_file = self.local_data_dir / "metadata.parquet"
+        if parquet_file.exists():
+            return self._load_parquet(parquet_file, self.local_data_dir)
 
-        for json_file in gaia_files:
+        # Fallback: look for JSONL files (legacy GAIA 2023 format)
+        for subdir in [self.local_data_dir / "2023" / self.split, split_dir, self.local_data_dir]:
+            jsonl_file = subdir / "metadata.jsonl"
+            if jsonl_file.exists():
+                return self._load_jsonl(jsonl_file, subdir)
+
+        # Final fallback: look for JSON files
+        json_files = list(self.local_data_dir.glob("**/*.json"))
+        for json_file in json_files:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     file_data = json.load(f)
-
                 if isinstance(file_data, list):
                     for item in file_data:
                         data.append(self._standardize_item(item))
                 else:
                     data.append(self._standardize_item(file_data))
-
-                print(f"   加载文件: {json_file.name} ({len(file_data)} 样本)")
+                print(f"   Loaded file: {json_file.name} ({len(file_data) if isinstance(file_data, list) else 1} samples)")
             except Exception as e:
-                print(f"   ⚠️ 加载文件失败: {json_file.name} - {e}")
+                print(f"   ⚠️ Failed to load file: {json_file.name} - {e}")
 
         return data
 
-    def _load_from_huggingface(self) -> List[Dict[str, Any]]:
-        """从HuggingFace下载GAIA数据集
+    def _load_parquet(self, parquet_file: Path, attachments_dir: Path) -> List[Dict[str, Any]]:
+        """Load data from a parquet file."""
+        import pandas as pd
 
-        注意：GAIA是gated dataset，需要HF_TOKEN环境变量
-        使用snapshot_download下载整个数据集到本地
+        df = pd.read_parquet(parquet_file)
+        print(f"   Loaded file: {parquet_file} ({len(df)} samples)")
+
+        data = []
+        for _, row in df.iterrows():
+            item = row.to_dict()
+
+            # Skip placeholder entries
+            if item.get("task_id") == "0-0-0-0-0":
+                continue
+
+            # Resolve attachment file paths to absolute paths
+            if item.get("file_name"):
+                abs_path = attachments_dir / item["file_name"]
+                if abs_path.exists():
+                    item["file_name"] = str(abs_path)
+
+            data.append(self._standardize_item(item))
+
+        return data
+
+    def _load_jsonl(self, jsonl_file: Path, attachments_dir: Path) -> List[Dict[str, Any]]:
+        """Load data from a JSONL file."""
+        data = []
+        with open(jsonl_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                item = json.loads(line)
+                if item.get("task_id") == "0-0-0-0-0":
+                    continue
+                if item.get("file_name"):
+                    abs_path = attachments_dir / item["file_name"]
+                    if abs_path.exists():
+                        item["file_name"] = str(abs_path)
+                data.append(self._standardize_item(item))
+
+        print(f"   Loaded file: {jsonl_file} ({len(data)} samples)")
+        return data
+
+    def _load_from_huggingface(self) -> List[Dict[str, Any]]:
+        """Download and load the GAIA dataset from HuggingFace.
+
+        Note: GAIA is a gated dataset and requires the HF_TOKEN environment variable.
+        Uses snapshot_download to download the entire dataset locally.
         """
         try:
             from huggingface_hub import snapshot_download
@@ -124,19 +181,18 @@ class GAIADataset:
             import json
             from pathlib import Path
 
-            print(f"   正在从HuggingFace下载: {self.dataset_name}")
+            print(f"   Downloading from HuggingFace: {self.dataset_name}")
 
-            # 获取HF token
+            # Get HF token
             hf_token = os.getenv("HF_TOKEN")
             if not hf_token:
-                print("   ⚠️ 未找到HF_TOKEN环境变量")
-                print("   GAIA是gated dataset，需要在HuggingFace上申请访问权限")
-                print("   然后设置环境变量: HF_TOKEN=your_token")
+                print("   ⚠️ HF_TOKEN environment variable not found")
+                print("   GAIA is a gated dataset; request access on HuggingFace first")
+                print("   Then set the environment variable: HF_TOKEN=your_token")
                 return []
 
-            # 下载数据集到本地
-            print(f"   📥 下载GAIA数据集...")
-            # 使用当前工作目录下的data/gaia文件夹
+            # Download dataset locally
+            print(f"   📥 Downloading GAIA dataset...")
             local_dir = Path.cwd() / "data" / "gaia"
             local_dir.mkdir(parents=True, exist_ok=True)
 
@@ -146,23 +202,23 @@ class GAIADataset:
                     repo_type="dataset",
                     local_dir=str(local_dir),
                     token=hf_token,
-                    local_dir_use_symlinks=False  # Windows兼容性
+                    local_dir_use_symlinks=False
                 )
-                print(f"   ✓ 数据集下载完成: {local_dir}")
+                print(f"   ✓ Dataset download complete: {local_dir}")
             except Exception as e:
-                print(f"   ⚠️ 下载失败: {e}")
-                print("   请确保:")
-                print("   1. 已在HuggingFace上申请GAIA访问权限")
-                print("   2. HF_TOKEN正确且有效")
+                print(f"   ⚠️ Download failed: {e}")
+                print("   Please ensure:")
+                print("   1. You have requested access to GAIA on HuggingFace")
+                print("   2. Your HF_TOKEN is correct and valid")
                 return []
 
-            # 读取metadata.jsonl文件
+            # Read metadata.jsonl file
             metadata_file = local_dir / "2023" / self.split / "metadata.jsonl"
             if not metadata_file.exists():
-                print(f"   ⚠️ 未找到metadata文件: {metadata_file}")
+                print(f"   ⚠️ Metadata file not found: {metadata_file}")
                 return []
 
-            # 加载数据
+            # Load data
             data = []
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -172,80 +228,85 @@ class GAIADataset:
 
                     item = json.loads(line)
 
-                    # 跳过占位符
+                    # Skip placeholder entries
                     if item.get("task_id") == "0-0-0-0-0":
                         continue
 
-                    # 调整文件路径
+                    # Resolve file paths
                     if item.get("file_name"):
                         item["file_name"] = str(local_dir / "2023" / self.split / item["file_name"])
 
-                    # 标准化并添加
+                    # Standardize and append
                     standardized_item = self._standardize_item(item)
                     data.append(standardized_item)
 
-            print(f"   ✓ 加载了 {len(data)} 个样本")
+            print(f"   ✓ Loaded {len(data)} samples")
             return data
 
         except ImportError:
-            print("   ⚠️ huggingface_hub库未安装")
-            print("   提示: pip install huggingface_hub")
+            print("   ⚠️ huggingface_hub is not installed")
+            print("   Hint: pip install huggingface_hub")
             return []
         except Exception as e:
-            print(f"   ⚠️ 加载失败: {e}")
+            print(f"   ⚠️ Loading failed: {e}")
             import traceback
             traceback.print_exc()
             return []
 
     def _standardize_item(self, item: Dict[str, Any]) -> Dict[str, Any]:
-        """标准化数据项格式"""
-        # GAIA数据集的标准字段
+        """Standardize a data item to a common format."""
+        raw_level = item.get("Level", item.get("level", 1))
+        try:
+            level_int = int(raw_level)
+        except (ValueError, TypeError):
+            level_int = 1
+
         standardized = {
             "task_id": item.get("task_id", ""),
             "question": item.get("Question", item.get("question", "")),
-            "level": item.get("Level", item.get("level", 1)),
+            "level": level_int,
             "final_answer": item.get("Final answer", item.get("final_answer", "")),
             "file_name": item.get("file_name", ""),
             "file_path": item.get("file_path", ""),
             "annotator_metadata": item.get("Annotator Metadata", item.get("annotator_metadata", {})),
             "steps": item.get("Steps", item.get("steps", 0)),
             "tools": item.get("Tools", item.get("tools", [])),
-            "raw_item": item  # 保留原始数据
+            "raw_item": item  # Keep original data
         }
 
         return standardized
-    
+
     def get_sample(self, index: int) -> Dict[str, Any]:
-        """获取单个样本
+        """Get a single sample.
 
         Args:
-            index: 样本索引
+            index: Sample index
 
         Returns:
-            样本数据
+            Sample data
         """
         if not self.data:
             self.load()
         return self.data[index] if index < len(self.data) else {}
 
     def get_by_level(self, level: int) -> List[Dict[str, Any]]:
-        """获取指定难度级别的样本
+        """Get samples of a specific difficulty level.
 
         Args:
-            level: 难度级别 (1-3)
+            level: Difficulty level (1-3)
 
         Returns:
-            该级别的所有样本
+            All samples at that level
         """
         if not self.data:
             self.load()
         return [item for item in self.data if item.get("level") == level]
 
     def get_level_distribution(self) -> Dict[int, int]:
-        """获取难度级别分布
+        """Get the distribution of difficulty levels.
 
         Returns:
-            字典，键为级别，值为该级别的样本数
+            Dict mapping level to sample count
         """
         if not self.data:
             self.load()
@@ -259,20 +320,20 @@ class GAIADataset:
         return distribution
 
     def get_statistics(self) -> Dict[str, Any]:
-        """获取数据集统计信息
+        """Get dataset statistics.
 
         Returns:
-            统计信息字典
+            Statistics dict
         """
         if not self.data:
             self.load()
 
         level_dist = self.get_level_distribution()
 
-        # 统计需要文件的样本数
+        # Count samples with file attachments
         with_files = sum(1 for item in self.data if item.get("file_name"))
 
-        # 统计平均步数
+        # Calculate average steps
         steps_list = [item.get("steps", 0) for item in self.data if item.get("steps")]
         avg_steps = sum(steps_list) / len(steps_list) if steps_list else 0
 
@@ -285,14 +346,13 @@ class GAIADataset:
         }
 
     def __len__(self) -> int:
-        """返回数据集大小"""
+        """Return dataset size."""
         if not self.data:
             self.load()
         return len(self.data)
 
     def __iter__(self):
-        """迭代器"""
+        """Iterator."""
         if not self.data:
             self.load()
         return iter(self.data)
-

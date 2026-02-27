@@ -6,6 +6,7 @@ from .react_agent import ReActAgent
 from .reflection_agent import ReflectionAgent
 from .plan_solve_agent import PlanAndSolveAgent
 from .tool_aware_agent import ToolAwareSimpleAgent
+from .orchestrator_agent import OrchestratorAgent
 
 __all__ = [
     "SimpleAgent",
@@ -13,5 +14,6 @@ __all__ = [
     "ReActAgent",
     "ReflectionAgent",
     "PlanAndSolveAgent",
-    "ToolAwareSimpleAgent"
+    "ToolAwareSimpleAgent",
+    "OrchestratorAgent",
 ]

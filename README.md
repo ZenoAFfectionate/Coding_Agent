@@ -14,8 +14,8 @@ The Coding Agent extends HelloAgents' tool-based architecture with a comprehensi
 
 The project provides two execution modes:
 
-- **Single-agent mode** (`inference.py` / `tool_agent.py`): A ReActAgent or FunctionCallAgent equipped with all coding tools, supporting interactive REPL and batch inference.
-- **Multi-agent mode** (`run_multi.py`): An orchestrator agent that delegates to specialized worker agents (review, test, optimize, debug), each with a curated subset of tools.
+- **Single-agent mode** (`react_agent.py` / `funca_agent.py`): A ReActAgent or FunctionCallAgent equipped with all coding tools, supporting interactive REPL and batch inference.
+- **Multi-agent mode** (`run_swarm.py`): An orchestrator agent that delegates to specialized worker agents (review, test, optimize, debug), each with a curated subset of tools.
 
 ### Core Capabilities
 
@@ -75,32 +75,14 @@ LLM_BASE_URL=your-api-base-url
 For local model deployment (e.g., with vLLM):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 \
+CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3.5-35B-A3B \
     --tensor-parallel-size 2 \
     --port 8000 \
-    --gpu-memory-utilization 0.9 \
-    --trust-remote-code
-```
-
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3-Coder-30B-A3B-Instruct \
-    --tensor-parallel-size 2 \
-    --port 8000 \
-    --gpu-memory-utilization 0.9 \
-    --trust-remote-code \
+    --gpu-memory-utilization 0.90 \
+    --language-model-only \
+    --reasoning-parser qwen3 \
     --enable-auto-tool-choice \
     --tool-call-parser qwen3_coder
-```
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 vllm serve zai-org/GLM-4.7-Flash \
-    --tensor-parallel-size 2 \
-    --port 8000 \
-    --gpu-memory-utilization 0.9 \
-    --trust-remote-code \
-    --enable-auto-tool-choice \
-    --tool-call-parser glm47
 ```
 
 ### Running the Agent
@@ -108,83 +90,129 @@ CUDA_VISIBLE_DEVICES=0,1 vllm serve zai-org/GLM-4.7-Flash \
 **Single-agent — Interactive REPL (sandbox mode):**
 
 ```bash
-python inference.py                # ReAct agent
-python tool_agent.py               # Function-calling agent
+python react_agent.py              # ReAct agent (text-based, works with any LLM)
+python funca_agent.py              # Function-calling agent (native tool calling)
 ```
 
 **Single-agent — Interactive REPL (on a real project):**
 
 ```bash
-python inference.py --workspace ./my_project
+python react_agent.py --workspace ./my_project
+python funca_agent.py --workspace ./my_project
 ```
 
 **Single-agent — With session persistence (save/restore across restarts):**
 
 ```bash
-python inference.py --restore                          # auto session file
-python tool_agent.py --session-file my_session.json    # custom path
+python react_agent.py --restore                          # auto session file
+python funca_agent.py --session-file my_session.json     # custom path
 ```
 
 **Single-agent — Batch mode:**
 
 ```bash
-python inference.py --batch --input data/xCode/valid.jsonl --output data/xCode/result.jsonl
+python react_agent.py --batch --input data/xCode/valid.jsonl --output data/xCode/result.jsonl
+python funca_agent.py --batch --input data/xCode/valid.jsonl --output data/xCode/result.jsonl
 ```
 
 **Multi-agent — Interactive REPL (sandbox mode):**
 
 ```bash
-python run_multi.py
+python run_swarm.py
 ```
 
 **Multi-agent — Single-shot mode:**
 
 ```bash
-python run_multi.py --task "Review and optimize my_project/main.py" --workspace ./my_project
+python run_swarm.py --task "Review and optimize my_project/main.py" --workspace ./my_project
 ```
 
-### Programmatic Usage
+**Multi-agent — Single-shot mode (with task from file):**
+
+```bash
+python run_swarm.py --task "$(cat data/xCode/simple_test.txt)"
+```
+
+**Multi-agent — Batch mode on xCode dataset (with detailed logging):**
+
+```bash
+# Batch inference — process xCode problems with multi-agent collaboration
+# Detailed interaction logs (orchestrator decisions, worker dispatches,
+# blackboard state, tool calls) are written to results/logs/multi_agent.log
+python run_swarm.py --batch \
+    --input data/xCode/valid.jsonl \
+    --output data/xCode/result_multi.jsonl \
+    --limit 10 \
+    --max-worker-steps 20 \
+    --max-rounds 6 \
+    --temperature 0.2
+
+# View detailed multi-agent interaction log
+cat results/logs/multi_agent.log
+
+# Custom log directory
+python run_swarm.py --batch \
+    --input data/xCode/test.jsonl \
+    --output results/swarm_test_results.jsonl \
+    --log-dir results/logs/custom \
+    --limit 5
+
+# Disable reflection and summarization for faster runs
+python run_swarm.py --batch \
+    --input data/xCode/valid.jsonl \
+    --output data/xCode/result_multi_fast.jsonl \
+    --no-reflect --no-summarize --limit 5
+```
+
+### ReAct Agent vs. Function Calling Agent
+
+The project provides two single-agent paradigms with distinct strengths, selectable via the entry point script:
+
+**ReAct Agent** (`react_agent.py`) uses a text-based Thought/Action/Observation loop. The LLM generates free-form reasoning (`Thought: ...`) followed by a tool invocation (`Action: tool_name[json_args]`), which the agent parses via regex. This approach is **universally compatible** — it works with any LLM, including open-source models that do not support native function calling (e.g., Qwen-Thinking, DeepSeek, LLaMA). It is the best choice when working with local deployments or non-OpenAI-compatible providers.
+
+**Function Calling Agent** (`funca_agent.py`) uses the OpenAI native function calling protocol. Tool schemas are automatically generated from `ToolParameter` definitions and passed to the LLM via the `tools` API parameter. The LLM returns structured JSON tool calls rather than free-form text, eliminating parsing ambiguity. When the model returns multiple tool calls in a single response, they are executed **in parallel** via `ThreadPoolExecutor`. This paradigm is the default for models that support it, offering higher reliability and lower latency.
+
+Both agents share the same underlying capabilities — debug loop, reflection, context compaction, session persistence, and the full tool inventory — differing only in how they communicate with the LLM.
 
 ```python
+# ReActAgent — works with any LLM
 from code.agents.react_agent import ReActAgent
-from code.core.llm import HelloAgentsLLM
-from code.core.config import Config
-from code.tools.registry import ToolRegistry
-from code.tools.builtin.file_tool import FileTool
-from code.tools.builtin.code_execution_tool import CodeExecutionTool
-from code.tools.builtin.linter_tool import LinterTool
-from code.tools.builtin.profiler_tool import ProfilerTool
 
-llm = HelloAgentsLLM()
-config = Config()
-
-# Register coding tools
-registry = ToolRegistry()
-registry.register_tool(FileTool(workspace="./my_project"))
-registry.register_tool(CodeExecutionTool(workspace="./my_project"))
-registry.register_tool(LinterTool(workspace="./my_project"))
-registry.register_tool(ProfilerTool(workspace="./my_project"))
-
-# Create the coding agent
 agent = ReActAgent(
     name="CodingAgent",
     llm=llm,
-    system_prompt="You are a Python coding assistant with access to file, execution, linting, and profiling tools.",
+    system_prompt="You are a Python coding assistant.",
     tool_registry=registry,
-    max_steps=15,
-    config=config,
+    max_steps=16,
+    enable_reflection=True,
+    enable_debug_loop=True,
 )
+response = agent.run("Read main.py and fix the bug on line 42")
+```
 
-response = agent.run("Read main.py and check it for lint errors")
+```python
+# FunctionCallAgent — native structured tool calling + parallel execution
+from code.agents.function_call_agent import FunctionCallAgent
+
+agent = FunctionCallAgent(
+    name="CodingAgent",
+    llm=llm,
+    system_prompt="You are a Python coding assistant.",
+    tool_registry=registry,
+    max_steps=32,
+    enable_reflection=True,
+    enable_debug_loop=True,
+)
+response = agent.run("Read main.py and fix the bug on line 42")
 ```
 
 ---
 
-## Single-Agent Workflow Example
+## Coding Agent Workflow
 
-This section illustrates the concrete execution flow when the single agent (`inference.py`) solves a coding problem. The trace below is based on actual agent output using `Qwen/Qwen3-30B-A3B-Thinking-2507`.
+This section illustrates the concrete execution flow when the single agent (`react_agent.py` / `funca_agent.py`) solves a coding problem. The trace below is based on actual agent output using `Qwen/Qwen3.5-30B-A3B`.
 
-### Execution Flow Overview
+### Single-Agent Execution Flow Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -239,447 +267,314 @@ This section illustrates the concrete execution flow when the single agent (`inf
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### Traced Example
+### Multi-Agent Execution Flow Overview
 
-Below is an abbreviated trace of the agent solving a competitive programming problem (dynamic container cost calculation). The full trace is available in `output.txt`.
 
-**Step 1 — LLM Call (Reasoning):** The model receives the problem, reasons through the algorithm (understanding the push/pop/resize mechanics, deriving the O(n) simulation approach), and decides to write the solution to a file.
-
-```
-[Step 1]   LLM Call  (26944ms)
-  <think>
-  ... (model reasons about the problem, derives the algorithm,
-       traces through both examples to verify logic) ...
-
-  The condition for shrinking is: size * 4 <= capacity (avoids floating point).
-  The code should be O(n) — each operation is O(1).
-  </think>
-
-  Thought: I need to implement the cost calculation. I'll write the solution
-           to solution.py and verify with the provided examples.
-  Action: file[{"action": "write", "path": "solution.py", "content": "..."}]
-```
-
-**Steps 2–4 — Tool Execution (Write File):**
-
-```
-[Step 2]   Thought   — Parsed reasoning from LLM output
-[Step 3]   Action    — file[{"action": "write", "path": "solution.py", ...}]
-[Step 4]   Observation  (1ms)
-             Successfully wrote 437 bytes (21 lines) to solution.py
-```
-
-**Steps 5–8 — Test with Example 1:**
-
-```
-[Step 5]   LLM Call  (12338ms)
-  Thought: Verify the code against Example 1. Expected output: 6.
-  Action: code_exec[{"action": "shell", "code": "echo '...' | python solution.py"}]
-
-[Step 8]   Observation  (46ms)
-             Exit code: 0
-             stdout: 6                          ← ✓ Matches expected
-```
-
-**Steps 9–12 — Test with Example 2:**
-
-```
-[Step 9]   LLM Call  (8595ms)
-  Thought: Example 1 passed. Now verify Example 2. Expected output: 12.
-  Action: code_exec[{"action": "shell", "code": "echo '...' | python solution.py"}]
-
-[Step 12]  Observation  (31ms)
-             Exit code: 0
-             stdout: 12                         ← ✓ Matches expected
-```
-
-**Steps 13–16 — Conclude & Reflect:**
-
-```
-[Step 13]  LLM Call  (5621ms)
-  Thought: Both examples pass. The logic is correct. No changes needed.
-  Action: Finish[The solution correctly calculates the total cost ...]
-
-[Step 15]  Reflection
-             approved=True: The solution correctly handles the resizing
-             conditions and cost calculations.
-
-[Step 16]  Final Answer
-             The solution correctly calculates the total cost for the
-             container operations as verified by the provided examples.
-```
-
-**Post-Processing:**
-
-```
-============================================================
- Summary: 16 steps | Duration: 72.47s
-============================================================
-[Trajectory] Saved to results/trajectories/single_agent_trajectory.json
-============================================================
-  Generated Code Files
-============================================================
---- solution.py ---
-n = int(input().strip())
-size = 0
-capacity = 1
-total_cost = 0
-...
-============================================================
-```
-
-### Key Observations
-
-- **Reasoning-first:** The model spends the majority of time in the first LLM call (~27s), where it fully understands the problem and derives the algorithm before writing any code.
-- **Write-then-verify pattern:** The agent writes the complete solution in one shot, then tests it against the provided examples using shell execution.
-- **Self-verification:** Even after confirming both test cases pass, the agent goes through a reflection step that reviews whether the solution is complete and correct before finalizing.
-- **Minimal iteration:** For straightforward problems, the agent converges in a single write + test cycle (no debug loop triggered). The structured debug protocol activates only when tool observations contain errors.
-
-> **Note:** This trace covers the **single-agent** mode only. Multi-agent mode (orchestrator + specialized workers) follows a different delegation-based workflow and is not shown here.
 
 ---
 
-## Implemented Optimizations
+## Key Technical Highlights
 
-The following optimizations were implemented on top of the base HelloAgents framework. They span the ReAct agent core loop, agent base class, all agent subclasses, the LLM layer, the tool system, the context/memory layer, and the CLI entry point.
+Beyond the base HelloAgents framework, this project introduces a series of deeply engineered mechanisms that push the coding agent toward production-grade reliability and autonomy. The following sections detail the core technical contributions.
 
-### 1. Structured Self-Debugging Loop (ReActAgent)
+### 1. Token-Budget-Aware Dynamic Context Compaction
 
-**Files:** `code/agents/react_agent.py`, `code/agents/prompts/debug.prompt`, `code/agents/prompts/react.prompt`
+Long-running coding tasks — multi-file refactors, iterative debugging sessions, test-fix-retest cycles — accumulate tool outputs and conversation history at a pace that quickly exhausts the LLM's context window. Rather than naively truncating messages or hoping the model stays within limits, the agent implements a **full-conversation compaction strategy inspired by Claude Code's auto-compact mechanism**.
 
-The most significant enhancement. When a tool observation contains an error (non-zero exit code, traceback, test failure), the agent automatically enters a **structured debug protocol** instead of relying on the LLM to figure out recovery on its own.
+The core idea is straightforward: when the total token count of the conversation reaches **85% of the configured budget** (e.g., ~170K out of 200K tokens), the system triggers a one-shot compaction pass. The entire conversation body — every user message, assistant response, and tool result accumulated so far, *except* the system prompt and the most recent user input — is fed to the LLM with a specialized summarization prompt. The LLM produces a structured summary that deliberately preserves the information a coding agent needs for continued reasoning: exact file paths, function signatures, error messages, unresolved issues, and key decisions made so far. Verbose tool outputs, repeated failed attempts, and conversational filler are aggressively compressed.
 
-**How it works:**
+The compacted summary is then injected back into the context as a **user/assistant message pair** — not a system instruction. This design choice mirrors the Claude API's compaction pattern: by placing the summary as the assistant's own prior output, the model treats it as established context rather than an external directive, producing more natural continuation behavior and preserving correct turn-taking for OpenAI-compatible APIs.
 
-```
-Normal step:  Action → Observation (success) → next Thought
-Debug step:   Action → Observation (error detected) → debug context injected → guided Thought
-```
+```python
+# code/core/agent.py — _manage_context_budget()
 
-- **Error classification** (`_classify_observation`): Inspects each tool observation and classifies errors into categories — `syntax_error`, `import_error`, `runtime_error`, `timeout`, or `test_failure`. Detection is tool-aware: `code_exec` observations are checked for non-zero exit codes and traceback patterns; `test_runner` observations are checked for `FAILED`/`ERROR` lines; all other tools fall back to generic traceback detection.
+COMPACTION_THRESHOLD = 0.85
 
-- **Debug state tracking** (`_DebugState` dataclass): Tracks whether debug mode is active, the error type/summary, the failed action, and the current attempt count. Resets automatically on successful observation.
+def _manage_context_budget(self, messages: list[dict]) -> list[dict]:
+    if self.context_max_tokens <= 0:
+        return messages
 
-- **Debug context injection**: When an error is detected, structured guidance is appended to the observation message, walking the LLM through a 5-step protocol:
+    total = self._count_messages_tokens(messages)
+    trigger = int(self.context_max_tokens * self.COMPACTION_THRESHOLD)
+    if total <= trigger:
+        return messages
 
-  > 1. **ANALYZE** — Identify the exact error type, file, and line
-  > 2. **READ** — Read the relevant source code (do not skip this step)
-  > 3. **DIAGNOSE** — Hypothesize the root cause
-  > 4. **FIX** — Apply a minimal, targeted fix
-  > 5. **VERIFY** — Re-run the exact command that failed
+    # Separate system prompts, conversation body, and current input.
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    non_system  = [m for m in messages if m.get("role") != "system"]
+    current_input = non_system[-1]
+    conversation_body = non_system[:-1]
 
-- **Retry cap** (`max_debug_attempts=3`): After N consecutive failed debug attempts for the same error, the agent receives an exhaustion message and continues without further debug guidance, preventing infinite loops.
+    # Compact the entire conversation body into one LLM-generated summary.
+    summary_text = self._compact_messages(conversation_body)
 
-- **Trajectory tracking**: Debug events (`debug`, `debug_resolved`) are recorded in the trajectory for post-run analysis.
-
-- **Backward compatible**: Set `enable_debug_loop=False` to disable entirely — the agent behaves identically to the original.
-
-**Key design decision:** The debug loop is *not* a separate execution loop or class. It works entirely within the existing ReAct Thought/Action/Observation cycle by enriching the observation message. This is the lightest-touch change that avoids architectural disruption while providing the most benefit.
-
-### 2. Prompt Architecture & Text Processing (ReActAgent)
-
-**File:** `code/agents/react_agent.py`
-
-**Prompt construction**: Each ReAct step calls `_build_prompt()` which concatenates the system prompt, ReAct format template (with tool descriptions), the current question, and the full execution history into a single prompt. The execution history grows incrementally — each step appends its Thought/Action/Observation triplet to a `List[str]`, and the entire list is serialized into the prompt for the next LLM call.
-
-**Tool output truncation** (`max_tool_output_chars=8000`): Long tool outputs are truncated to keep the first and last halves, preventing a single verbose tool response from blowing the context window.
-
-**Qwen3 think-tag handling** (`_strip_think_tags`): Removes `<think>...</think>` blocks emitted by thinking models (e.g. Qwen-Thinking series). Also handles orphaned `</think>` tags (missing opening `<think>`) common when serving via vLLM — everything before the last `</think>` is treated as thinking content and stripped.
-
-**Parse error recovery**: The LLM response is parsed via regex to extract `Thought:` and `Action:` fields. If the response lacks a valid `Action:` field, a structured error message is injected into the history (e.g. "you must include an Action"), and the loop continues — the next LLM call sees the error and can self-correct.
-
-### 3. Agent Base Class Enhancements
-
-**File:** `code/core/agent.py`
-
-| Enhancement | Description |
-|---|---|
-| **Cached tiktoken encoder** | The `_count_tokens()` method now caches the tiktoken encoding object at instance level instead of re-importing and re-creating it on every call. |
-| **Debug-aware printing** | New `_print(msg, level)` method respects `config.debug`. Level `"debug"` only prints when debug mode is on; `"info"` always prints. All agent subclasses now use this instead of bare `print()`. |
-| **History length enforcement** | `add_message()` now trims the oldest messages when `config.max_history_length` is exceeded, preventing unbounded memory growth. |
-| **Rich history entries** | `_build_execution_summary()` extracts tool calls, files modified, errors, and key observations from the trajectory, and appends this execution context to the assistant message stored in `_history`. This gives the LLM full awareness of what happened in previous REPL turns — not just the bare Q&A, but which tools were called, what files were touched, and what errors occurred. |
-| **Claude Code-style context compaction** | `_manage_context_budget()` implements full conversation compaction modeled after Claude Code's approach. See details below. |
-| **Session persistence** | `save_session()` / `load_session()` serialize `_history` to a JSON file, enabling conversation continuity across process restarts. See details below. |
-
-#### Context Compaction (Claude Code-style)
-
-When the conversation approaches the token budget, the **entire conversation body** (everything except system prompts and the current user input) is compressed into a single LLM-generated summary in one operation. This is fundamentally different from incremental summarization, which would trigger frequently as new messages accumulate.
-
-**How it works:**
-
-```
-Before compaction:
-  [system_prompt] [user1] [assistant1] [tool_result1] ... [userN]
-
-After compaction:
-  [system_prompt] [user: "conversation compacted..."] [assistant: <summary>] [userN]
+    # Reassemble: [system] + [user: compaction notice] + [assistant: summary] + [current input]
+    result = list(system_msgs)
+    result.append({"role": "user", "content": "The conversation history has been compacted. ..."})
+    result.append({"role": "assistant", "content": summary_text})
+    result.append(current_input)
+    return result
 ```
 
-- **Trigger:** Fires when total context tokens reach `COMPACTION_THRESHOLD` (85%) of `context_max_tokens`. For example, with a 200K budget, compaction triggers at ~170K tokens.
-- **Summary placement:** The summary is stored as a **user/assistant message pair**, matching the Claude API compaction pattern — the summary prompt is injected as a user turn, and the LLM-generated summary is stored as an assistant turn. This preserves proper conversation turn-taking and causes the model to treat the summary as its own prior context rather than a system instruction.
-- **Prompt template:** `prompts/context_compaction.prompt` — instructs the LLM to preserve file paths, function names, error messages, decisions and rationale, and current state. The prompt explicitly distinguishes what to preserve (exact paths, error messages, unresolved issues) from what to compress (verbose tool output, repeated attempts, filler).
-- **Fallback:** `_mechanical_summary()` provides a best-effort structural extraction (user requests, assistant responses, tool results) without calling the LLM, used when the LLM call fails.
+A mechanical fallback (`_mechanical_summary()`) provides best-effort structural extraction without an LLM call in case the summarization request itself fails. The ReActAgent additionally performs inline history compaction on its text-based prompt, compressing older Thought/Action/Observation entries while preserving the most recent steps in full fidelity. Combined with a **step-budget warning** that injects a convergence prompt at 75% step consumption, these mechanisms ensure the agent can sustain arbitrarily long coding sessions without context degradation.
 
-This mirrors how production coding agents handle context overflow:
-- **Claude Code:** When context reaches ~95% capacity, auto-compact analyzes the full conversation, creates a compressed summary, and replaces old messages. Users can also run `/compact` manually.
-- **Aider:** Uses `--weak-model` to summarize chat history when it exceeds `max_chat_history_tokens`.
+### 2. Full-Lifecycle Software Engineering Toolchain with Built-in Security
 
-#### Rich History Entries
+The agent is equipped with **11 specialized tools** that collectively cover the entire software engineering workflow — from reading source code to profiling production performance. Each tool is a `Tool` subclass with its own JSON schema, and every tool embeds defense-in-depth security mechanisms rather than relying on a single outer sandbox.
 
-**Files:** `code/agents/react_agent.py`, `code/agents/function_call_agent.py`
+**Path sandboxing** is enforced at the tool level. The `FileTool`, for example, resolves every path against the workspace root and rejects any path that escapes via `../` traversal or symlink indirection. Edits to Python files are validated with `ast.parse()` before being committed — if the edit introduces a syntax error, the file is **automatically reverted** to its pre-edit state, and the agent receives a clear rejection message:
 
-The `_end_run()` method in both ReActAgent and FunctionCallAgent now calls `_build_execution_summary()` before storing the assistant message in `_history`. The summary appends structured execution context to the answer:
+```python
+# code/tools/builtin/file_tool.py
 
-```
-<actual answer>
+def _safe_path(self, rel_path: str) -> Optional[Path]:
+    """Resolve rel_path inside the workspace, blocking escapes."""
+    resolved = (self.workspace / rel_path).resolve()
+    try:
+        resolved.relative_to(self.workspace)
+    except ValueError:
+        return None  # path escape blocked
+    return resolved
 
----
-[Execution context for next turn]
-Tools called: file, code_exec, test_runner
-Files touched: src/main.py, tests/test_main.py
-Errors encountered: ImportError: no module named foo
-Key observations:
-  - def main(): ...
-  - All 5 tests passed
-```
-
-This means the next REPL turn's LLM call sees what the agent actually did, not just the final answer — closing the gap between the rich per-run trajectory and the bare cross-turn history.
-
-#### Session Persistence
-
-**Files:** `code/core/agent.py`, `inference.py`, `tool_agent.py`
-
-Session history is serialized to JSON on REPL exit and restored on startup:
-
-- `save_session(path)` — writes `_history` (with timestamps, roles, metadata) to a JSON file.
-- `load_session(path)` — reads a session file and populates `_history`.
-- `get_default_session_path(agent_name)` — returns a default path under `results/sessions/`.
-
-**CLI flags:**
-
-| Flag | Description |
-|---|---|
-| `--restore` | Restore previous session on startup (uses default session file path) |
-| `--session-file PATH` | Use a custom session file path |
-
-**REPL commands:**
-
-| Command | Description |
-|---|---|
-| `/save` | Manually save session to file |
-| `/history` | Show conversation history summary (message count, role, content preview) |
-| `/compact` | Note: compaction happens automatically when `context_max_tokens` is set |
-
-### 4. All Agent Subclasses — Debug-Aware Output & Robustness
-
-**Files:** `code/agents/reflection_agent.py`, `code/agents/plan_solve_agent.py`, `code/agents/function_call_agent.py`
-
-**ReflectionAgent:**
-- All `print()` calls replaced with `self._print()` for debug-aware output.
-- The `Memory` class now accepts a `debug` flag — memory update messages are only printed when debugging is enabled.
-- **Robust stop-condition detection**: The early-termination check was a single hard-coded string (`"no improvement needed"`). It now matches against 10+ common phrasings (`"no further improvement"`, `"the code is correct"`, `"no bugs found"`, etc.) via `_should_stop_refining()`.
-
-**PlanAndSolveAgent:**
-- Agent-level output uses debug-aware `self._print()`. Both `Planner` and `Executor` accept a `debug` flag, suppressing verbose output in production.
-- **Multi-strategy plan parsing**: The planner originally only tried to extract a Python list from a `` ```python `` code block. It now tries three strategies in order:
-  1. Python `ast.literal_eval` from code block
-  2. JSON parsing via `json.loads()` (handles `` ```json `` blocks and bare JSON)
-  3. Regex extraction of numbered lists from plain text (`1. Do X\n2. Do Y`)
-
-**FunctionCallAgent:**
-- **Parallel tool execution**: When the model returns multiple tool calls in a single response, they are now executed concurrently via `ThreadPoolExecutor` (up to 4 workers) instead of sequentially. Single tool calls skip the threading overhead entirely.
-
-### 5. LLM Layer Optimization
-
-**File:** `code/core/llm.py`
-
-- **Cached async client**: `ainvoke()` previously created a new `AsyncOpenAI` client on every call. The client is now lazily created once and reused, eliminating redundant connection setup and TLS handshakes.
-
-### 6. Config Modernization
-
-**File:** `code/core/config.py`
-
-- **Environment-driven defaults**: `default_model` and `default_provider` now default to `None` instead of hard-coded values, allowing `HelloAgentsLLM` to auto-detect from environment variables (`LLM_MODEL_ID`, `LLM_PROVIDER`). Eliminates the need to manually edit config when switching providers.
-- **`Config.from_env()`** now reads `LLM_MODEL_ID` and `LLM_PROVIDER` from the environment.
-- **Pydantic v2 compatibility**: Replaced deprecated `.dict()` with `.model_dump()`.
-
-### 7. AST-Based Code Search
-
-**File:** `code/tools/builtin/code_search_tool.py`
-
-Extended `CodeSearchTool` with three new AST-powered actions beyond the original grep/find_files:
-
-| Action | Description |
-|---|---|
-| `ast_search` | Structural query for `functions`, `classes`, `imports`, `calls`, or `decorators` across Python files |
-| `find_references` | Find all usages of a symbol (name references, attribute access, imports) across the codebase |
-| `get_structure` | Generate a file outline showing all classes, methods, functions with line numbers |
-
-These use Python's `ast` module for precise, syntax-aware results rather than regex pattern matching. The agent can now answer structural questions like "find all call sites of `my_func`" or "list all classes in `src/`" without false positives from comments or strings.
-
-### 8. Shell Command Safety
-
-**File:** `code/tools/builtin/code_execution_tool.py`
-
-Added a **blocklist check** for destructive shell patterns before execution:
-
-```
-rm -rf /    rm -rf ~    mkfs.*    :(){:|:&};:    > /dev/sd*    dd if=/dev/zero    chmod -R 777 /
+def _validate_and_maybe_revert(self, path, modified, original, rel) -> Optional[str]:
+    """For .py files, reject edits that introduce syntax errors."""
+    if not self.lint_on_edit or path.suffix != ".py":
+        return None
+    try:
+        ast.parse(modified, filename=str(path))
+        return None
+    except SyntaxError as e:
+        path.write_text(original, encoding="utf-8")  # auto-revert
+        return f"Edit rejected: syntax error in {rel} — {e.msg} (line {e.lineno})."
 ```
 
-Commands matching these patterns are blocked with a clear error message. This is a defense-in-depth measure — not a security boundary, but a guard against the most catastrophic accidental commands that an LLM might generate.
+**Code execution** runs in isolated subprocesses with process-group-level timeout enforcement. The `safe_run()` utility creates each subprocess in its own process group (`start_new_session=True`) and, on timeout, sends `SIGKILL` to the entire group — eliminating orphaned child processes that `subprocess.kill()` alone would miss. A blocklist intercepts catastrophic shell commands (`rm -rf /`, fork bombs, `dd` to block devices) before they reach the shell, and a stdin-hang detector identifies code that would block on `input()` / `sys.stdin.read()` and rejects it immediately rather than waiting for a 30-second timeout.
 
-### 9. Context & Memory Layer
+```python
+# code/utils/subprocess_utils.py
 
-**Files:** `code/context/builder.py`, `code/memory/types/working.py`
+def safe_run(*args, timeout=30, input=None, **kwargs) -> subprocess.CompletedProcess:
+    kwargs["start_new_session"] = True  # own process group for clean kill
+    proc = subprocess.Popen(*args, **kwargs)
+    try:
+        stdout, stderr = proc.communicate(input=input, timeout=timeout)
+        return subprocess.CompletedProcess(...)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc)  # SIGKILL to the entire process tree
+        raise
 
-- **Cached tiktoken in `count_tokens()`**: The module-level `count_tokens()` function in the context builder previously re-imported tiktoken and re-created the encoding on every call. Now uses a module-level cached encoding created once on first use.
+def _kill_process_group(proc):
+    pgid = os.getpgid(proc.pid)
+    os.killpg(pgid, signal.SIGKILL)
+```
 
-- **Cached sklearn imports in `WorkingMemory`**: The `retrieve()` method previously imported `TfidfVectorizer`, `cosine_similarity`, and `numpy` inside a try/except on every retrieval call. Now uses a module-level `_HAS_SKLEARN` flag checked once at import time, avoiding repeated failed import attempts when sklearn is not installed.
+**Code search** goes beyond text-based grep with a full **AST-powered structural search engine** and a **PageRank-based repository map**. The `ast_search` action uses Python's `ast` module to find functions, classes, imports, decorators, and call sites with zero false positives from comments or string literals. The `repo_map` action builds an import dependency graph across the entire codebase and ranks files using PageRank (optionally personalized by query keywords), giving the agent a high-level architectural overview before diving into specific files:
 
-### 10. CLI & Entry Points
+```python
+# code/tools/builtin/code_search_tool.py
 
-**Files:** `inference.py`, `tool_agent.py`, `run_multi.py`
+def _rank_graph(self, graph, query=None) -> List[Tuple[str, float]]:
+    """Rank files using PageRank, optionally personalized by query keywords."""
+    personalization = None
+    if query:
+        keywords = query.lower().split()
+        personalization = {
+            node: sum(1.0 for name, _, _, _ in graph.nodes[node].get("defs", [])
+                       for kw in keywords if kw in name.lower()) + 0.1
+            for node in graph.nodes
+        }
+    scores = nx.pagerank(graph, personalization=personalization)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
+```
 
-**Single-agent mode — ReAct (`inference.py`):**
+When the model returns multiple tool calls in a single response, they are dispatched concurrently via **`ThreadPoolExecutor`** (up to 4 workers), with results reassembled in the original call order. Single tool calls skip the threading overhead entirely.
 
-- **Two modes:** Interactive REPL (default) and batch (`--batch --input data.jsonl`).
-- **Sandbox mode by default**: When no `--workspace` is specified, the agent creates a temporary directory and registers an `atexit` cleanup handler. This prevents accidental writes to the user's filesystem.
-- **Direct workspace mode**: Use `--workspace ./my_project` to operate on real files.
-- **Reflection / self-verification**: Enabled by default. Disable with `--no-reflection`, or configure retries with `--max-reflection-retries N`.
-- **Session persistence**: Use `--restore` to save/restore conversation history across process restarts. Use `--session-file PATH` for a custom session file location.
-- **REPL commands**: `/help`, `/save` (save session), `/history` (show conversation summary), `/compact` (context compaction note).
-- **Batch mode**: Processes JSONL problem sets, extracts generated code from sandbox, and produces result JSONL files.
-- **Multi-line paste detection**: The REPL uses `select()` to detect buffered stdin lines from paste operations.
-- **Prompt management**: Loads the system prompt from `prompts/system.prompt`.
+```python
+# code/agents/function_call_agent.py
 
-**Single-agent mode — Function Calling (`tool_agent.py`):**
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-- Same REPL, sandbox, reflection, and session persistence features as `inference.py`.
-- Uses `FunctionCallAgent` with OpenAI-native function calling and parallel tool dispatch.
-- **Plan mode**: Use `--plan` to enable plan-then-execute mode where the LLM outlines a plan before acting.
+with ThreadPoolExecutor(max_workers=min(len(tool_calls), 4)) as pool:
+    futures = [pool.submit(_exec, tc) for tc in tool_calls]
+    by_id = {f.result()[0]: f.result() for f in as_completed(futures)}
+executed = [(*by_id[tc.id], None) for tc in tool_calls]  # preserve original order
+```
 
-**Multi-agent mode (`run_multi.py`):**
+The complete tool inventory: **FileTool** (read/write/edit/undo with syntax validation), **CodeExecutionTool** (Python & shell with sandbox), **CodeSearchTool** (regex + AST + PageRank repo map), **TestRunnerTool** (pytest/unittest auto-detection + coverage), **GitTool** (status/diff/log/commit/branch/blame with destructive-op blocking), **LinterTool** (ruff/flake8/py_compile + black formatter), **ProfilerTool** (cProfile/timeit/tracemalloc), plus supporting tools for terminal, search, memory, and notes.
 
-- **Orchestrator + Workers architecture**: The orchestrator dispatches tasks to specialized workers (review, test, optimize, debug), each with its own system prompt and curated tool set.
-- **Blackboard memory**: A shared `Blackboard` object accumulates findings and errors across workers, injected into the orchestrator's context.
-- **Dual communication mode**: Function calling (default) with automatic fallback to text-based JSON parsing for providers without function calling support.
-- **Result summarization**: LLM-based summarization of long worker results, with truncation fallback.
-- **Reflection on final answer**: The orchestrator self-critiques its synthesized answer before returning.
-- **CLI options**: `--max-worker-steps`, `--max-rounds`, `--max-result-chars`, `--context-max-tokens`, `--no-fc`, `--no-summarize`, `--no-reflect`.
+### 3. Blackboard-Based Multi-Agent Orchestration Framework
+
+For complex tasks that benefit from division of labor — such as "review this codebase, write tests, optimize the hotspots, and fix any bugs" — the system provides a **multi-agent orchestration framework** built on a shared Blackboard architecture.
+
+The **Orchestrator agent** acts as a project manager: it receives the user's request, formulates a plan, and iteratively dispatches subtasks to four types of **expert worker agents** — code review, test generation, performance optimization, and debugging. Each expert is a fully autonomous `FunctionCallAgent` with its own dedicated system prompt and a curated subset of tools appropriate to its specialty. The code review expert, for instance, has access to file reading, code search, linting, and git tools but *not* code execution — it cannot accidentally modify the codebase while reviewing it.
+
+```python
+# run_swarm.py
+
+WORKER_SPECS = {
+    "review": {
+        "prompt": "code_review",
+        "tools": ["file", "code_search", "linter", "git"],
+        "description": "Code review specialist: analyzes code quality, security, design, and correctness.",
+    },
+    "test": {
+        "prompt": "test_generation",
+        "tools": ["file", "code_exec", "code_search", "test_runner"],
+        "description": "Test generation specialist: writes and runs comprehensive test suites.",
+    },
+    "optimize": {
+        "prompt": "optimization",
+        "tools": ["file", "code_exec", "code_search", "profiler", "linter"],
+        "description": "Optimization specialist: profiles code and applies targeted performance improvements.",
+    },
+    "debug": {
+        "prompt": "debug",
+        "tools": ["file", "code_exec", "code_search", "test_runner", "git", "linter"],
+        "description": "Debug specialist: reproduces, diagnoses, and fixes bugs systematically.",
+    },
+}
+```
+
+The **Blackboard** is a structured shared memory that accumulates findings and errors across all worker rounds. Each expert's execution result is summarized by the LLM before being written to the blackboard, and the full blackboard state is serialized and injected into the orchestrator's context before each dispatch decision. This design achieves two critical properties: (1) information flows across agents without requiring them to share conversation histories, and (2) each expert's internal tool-calling details remain invisible to the orchestrator, keeping per-layer context sizes manageable.
+
+```python
+# run_swarm.py — Blackboard
+
+class Blackboard:
+    """Structured workspace state shared across the orchestrator and workers."""
+    def __init__(self, user_request: str):
+        self.user_request = user_request
+        self.findings: list[dict] = []   # {"source", "round", "summary"}
+        self.errors: list[dict] = []     # {"source", "round", "message"}
+        self.current_plan: str = ""
+
+    def serialize(self) -> str:
+        """Render the blackboard as a concise text block for injection into prompts."""
+        parts = [f"User request: {self.user_request}"]
+        if self.findings:
+            parts.append("\nFindings:")
+            for f in self.findings:
+                parts.append(f"  - [{f['source']} R{f['round']}] {f['summary']}")
+        return "\n".join(parts)
+```
+
+The orchestrator communicates with the LLM via **Function Calling** by default (using `dispatch_worker` and `finish` tool schemas), but automatically degrades to a **text-mode JSON parsing fallback** when the provider does not support function calling — a single try/except permanently switches modes for the rest of the session, ensuring zero retries are wasted:
+
+```python
+# run_swarm.py — OrchestratorAgent
+
+def _invoke_orchestrator(self, messages, force_finish=False):
+    if self._use_function_calling:
+        try:
+            return self._invoke_fc(messages, force_finish)
+        except Exception as exc:
+            self._use_function_calling = False  # permanent downgrade
+    return self._invoke_text(messages, force_finish)
+```
+
+### 4. LLM-Driven Reflection and Self-Verification
+
+A common failure mode of coding agents is producing answers that *look* complete but have not been validated — for example, writing a solution file but never executing it, or claiming a bug is fixed without re-running the failing test. The agent addresses this with a **reflection mechanism** that acts as an automated quality gate before any answer is returned to the user.
+
+When the agent calls `finish()` with a proposed answer, a separate LLM invocation reviews the answer against three dimensions: **completeness** (did the agent actually do what was asked?), **correctness** (are there logical errors or missing edge cases?), and **verification** (was the answer empirically tested?). The reflection is powered by a `_UsageState` tracker that records which tools were invoked, which files were written, and — critically — whether code was written but never executed. If the agent wrote code without running it or running tests, the reflection prompt receives an explicit flag instructing it to reject the answer:
+
+```python
+# code/agents/function_call_agent.py — _reflect_on_answer()
+
+def _reflect_on_answer(self, question, proposed_answer, usage) -> tuple[bool, str]:
+    verification_note = ""
+    if usage.wrote_code and not usage.ran_tests:
+        verification_note = (
+            "\n\n**IMPORTANT**: The agent wrote code but did NOT execute it "
+            "or run any tests. You should NOT approve if the task required "
+            "working code. Reject and ask the agent to test with code_exec."
+        )
+
+    prompt = self._reflection_prompt_template.format(
+        verification_note=verification_note,
+        question=question,
+        proposed_answer=proposed_answer,
+        tools_summary=", ".join(usage.tools_used) or "none",
+        files_written=", ".join(usage.files_written) or "none",
+        tests_executed="yes" if usage.ran_tests else "no",
+    )
+    response = self.llm.invoke([{"role": "user", "content": prompt}])
+    text = self._strip_think_tags(response)
+    approved = "APPROVED" in text.upper() and "NEEDS_REVISION" not in text.upper()
+
+    if not approved:
+        return False, "Your proposed answer was reviewed and found to have issues: ..."
+    return True, proposed_answer
+```
+
+If the reflection verdict is `NEEDS_REVISION`, the feedback (including specific issues identified) is injected back into the conversation, and the agent re-enters its reasoning loop to address them. This process repeats for up to N configurable rounds (`--max-reflection-retries`), significantly improving first-pass output quality by catching the "wrote code but didn't test it" class of errors that LLMs frequently produce.
+
+### 5. Automatic Error Detection and Debug Loop
+
+Tool execution failures — syntax errors, import errors, runtime exceptions, test failures — are inevitable during iterative coding. Rather than relying on the LLM to notice and interpret raw tracebacks (which it often misreads or ignores), the agent implements a **structured debug loop** that automatically classifies errors and injects targeted recovery guidance.
+
+The loop operates entirely within the existing reasoning cycle — it is not a separate execution path or class. After every tool execution, `_classify_observation()` inspects the output using tool-aware heuristics: `code_exec` results are checked for non-zero exit codes and traceback patterns, `test_runner` results for FAILED/ERROR lines, and all tools for generic traceback signatures. Detected errors are classified into categories (`syntax_error`, `import_error`, `runtime_error`, `timeout`, `test_failure`) and tracked by a `_DebugState` dataclass that persists across consecutive failed attempts:
+
+```python
+# code/agents/function_call_agent.py
+
+@dataclass
+class _DebugState:
+    active: bool = False
+    error_type: str = ""
+    error_summary: str = ""
+    failed_action: str = ""
+    attempts: int = 0
+
+@staticmethod
+def _classify_observation(tool_name: str, observation: str) -> dict | None:
+    low = observation.lower()
+    has_nonzero_exit = bool(re.search(r"exit code:\s*[1-9]", low))
+    has_traceback = "traceback (most recent call last)" in low
+
+    is_code_error = tool_name == "code_exec" and (has_nonzero_exit or has_traceback)
+    is_test_error = tool_name == "test_runner" and ("failed" in low or "error" in low)
+    if not (is_code_error or is_test_error or ...):
+        return None
+
+    return {"error_type": error_type, "summary": _extract_error_summary(observation)}
+```
+
+When an error is detected, `_maybe_debug()` appends structured guidance to the observation — walking the LLM through a 5-step protocol (ANALYZE the error, READ the relevant code, DIAGNOSE the root cause, apply a minimal FIX, and VERIFY by re-running the exact command that failed). If the same error persists after `max_debug_attempts` consecutive retries (default: 3), the debug loop emits an exhaustion message and resets, preventing infinite loops on unfixable issues. On success, the debug state resets silently and normal execution resumes.
+
+### 6. Multi-Paradigm Agent Architectures
+
+The project supports **four distinct agent reasoning paradigms**, each suited to different LLM capabilities and task structures:
+
+**ReActAgent** implements the classic Thought/Action/Observation text loop with regex-based parsing. It works with *any* LLM — including models that do not support function calling — making it the most portable option. The agent parses `Thought: ...` and `Action: tool_name[json_args]` from free-form text, with error recovery that injects structured feedback when the model produces malformed output.
+
+**FunctionCallAgent** uses native OpenAI function calling for structured tool invocation, with parallel dispatch via `ThreadPoolExecutor` when multiple tools are called simultaneously. This is the default mode for models that support it, offering both reliability (no regex parsing needed) and efficiency (parallel execution).
+
+**PlanAndSolveAgent** separates reasoning into an explicit planning phase and an execution phase. The `Planner` generates a step-by-step plan (supporting three extraction strategies: Python `ast.literal_eval`, JSON parsing, and numbered-list regex), and the `Executor` carries out each step sequentially with full history context.
+
+**OrchestratorAgent** coordinates multiple expert agents in a multi-round collaboration loop, as described in the Blackboard architecture section above.
+
+Critically, the Function Calling paradigm includes an **automatic degradation path**: when the LLM provider does not support function calling (or a function-calling request fails), the system transparently falls back to text-mode JSON parsing — `_invoke_fc` catches the exception and permanently switches to `_invoke_text` for the remainder of the session. This ensures the same agent configuration works across heterogeneous LLM backends without manual reconfiguration.
 
 ---
 
 ## Tool Details
 
-### LinterTool
+The agent's capabilities are organized as modular `Tool` subclasses, each with its own JSON schema, actions, and built-in security mechanisms. See [`code/tools/README.md`](code/tools/README.md) for comprehensive documentation including parameters, usage examples, and safety mechanisms.
 
-Static analysis, auto-fix, and code formatting with automatic backend detection.
-
-**Actions:**
-
-| Action | Description | Backend Priority |
-|---|---|---|
-| `check` | Run linter, report issues | ruff > flake8 > py_compile (stdlib) |
-| `fix` | Auto-fix lint issues in-place | ruff `--fix` |
-| `format` | Format code to style guidelines | ruff format > black |
-
-```python
-from code.tools.builtin import LinterTool
-
-linter = LinterTool(workspace="./my_project")
-
-# Check for lint errors
-result = linter.run({"action": "check", "path": "src/main.py"})
-
-# Auto-fix issues
-result = linter.run({"action": "fix", "path": "src/"})
-
-# Format code
-result = linter.run({"action": "format", "path": "src/main.py"})
-```
-
-The `py_compile` fallback is always available (stdlib) and provides syntax checking even when no external linter is installed.
-
-### ProfilerTool
-
-Performance profiling using Python stdlib — no external dependencies required.
-
-**Actions:**
-
-| Action | Description | Backend |
-|---|---|---|
-| `profile` | CPU profile a file, show top-N hotspots | `cProfile` + `pstats` |
-| `timeit` | Benchmark a code snippet | `timeit` |
-| `memory` | Memory allocation snapshot | `tracemalloc` |
-
-```python
-from code.tools.builtin import ProfilerTool
-
-profiler = ProfilerTool(workspace="./my_project")
-
-# CPU profile a file
-result = profiler.run({"action": "profile", "path": "src/main.py", "top_n": 10})
-
-# Benchmark a snippet
-result = profiler.run({
-    "action": "timeit",
-    "code": "[i**2 for i in range(1000)]",
-    "number": 10000,
-    "repeat": 5
-})
-
-# Memory profiling
-result = profiler.run({
-    "action": "memory",
-    "code": "x = [i for i in range(100000)]",
-    "top_n": 10
-})
-```
-
-### CodeSearchTool
-
-Code search with both text-based (grep/ripgrep) and AST-based structural queries.
-
-**Text search actions:**
-
-| Action | Description |
-|---|---|
-| `search` | Regex or literal string search across files with context lines |
-| `find_files` | Glob-based file discovery |
-
-**AST-based actions:**
-
-| Action | Description |
-|---|---|
-| `ast_search` | Find `functions`, `classes`, `imports`, `calls`, or `decorators` across Python files |
-| `find_references` | Find all usages of a symbol across the codebase |
-| `get_structure` | File outline with classes, methods, functions, and line numbers |
-
-```python
-from code.tools.builtin import CodeSearchTool
-
-search = CodeSearchTool(workspace="./my_project")
-
-# Find all classes in a directory
-result = search.run({"action": "ast_search", "query_type": "classes", "path": "src/"})
-
-# Find all call sites of a function
-result = search.run({"action": "ast_search", "query_type": "calls", "symbol": "my_func"})
-
-# Find all references to a symbol
-result = search.run({"action": "find_references", "symbol": "MyClass"})
-
-# Get file structure outline
-result = search.run({"action": "get_structure", "path": "src/core/agent.py"})
-```
-
-### Other Coding Tools
-
-- **FileTool** — `read`, `write`, `edit` (exact string replacement), `list_dir`, `file_info`
-- **CodeExecutionTool** — Execute Python or shell code in sandboxed subprocesses (with destructive command blocklist)
-- **TestRunnerTool** — `discover`, `run`, `coverage` with pytest/unittest auto-detection
-- **GitTool** — `status`, `diff`, `commit`, `log`, `branch`, `checkout`
+| Tool | Name | Key Actions | Description |
+|---|---|---|---|
+| **FileTool** | `file` | `read`, `write`, `edit`, `insert`, `undo`, `list_dir` | File operations with path sandboxing, syntax validation, and auto-revert |
+| **CodeExecutionTool** | `code_exec` | `python`, `shell` | Sandboxed subprocess execution with timeout, blocklist, and stdin-hang detection |
+| **CodeSearchTool** | `code_search` | `search`, `find_files`, `ast_search`, `find_references`, `repo_map` | Regex + AST structural search + PageRank-based repository map |
+| **TestRunnerTool** | `test_runner` | `discover`, `run`, `coverage` | pytest/unittest auto-detection with structured result parsing |
+| **GitTool** | `git` | `status`, `diff`, `log`, `commit`, `branch`, `stash`, `blame` | Git operations with destructive-command blocking |
+| **LinterTool** | `linter` | `check`, `fix`, `format` | Static analysis (ruff > flake8 > py_compile) and formatting (ruff format > black) |
+| **ProfilerTool** | `profiler` | `profile`, `timeit`, `memory` | CPU profiling (cProfile), benchmarking (timeit), memory analysis (tracemalloc) |
+| **TerminalTool** | `terminal` | whitelisted commands | Safe filesystem and text-processing commands with command whitelist |
+| **FinishTool** | `finish` | `result` | Signal task completion; breaks the FunctionCallAgent loop immediately |
+| **MemoryTool** | `memory` | `add`, `search`, `summary`, `consolidate` | Store and retrieve conversation knowledge with importance scoring |
+| **NoteTool** | `note` | `create`, `read`, `update`, `delete`, `search` | Structured notes with type classification, tags, and Markdown persistence |
 
 ## Evaluation Benchmarks
 
@@ -732,7 +627,33 @@ python evaluation.py --benchmark swev --agent-type funca --max-samples 2
 python evaluation.py --benchmark swev --agent-type react --repo-filter django/django --export
 ```
 
-### 4. Data Generation Quality (AIME / LLM Judge)
+### 4. TritonBench (TRIB)
+
+Evaluates an agent's ability to generate **Triton GPU kernels** from natural language specifications. The agent must write compilable, functionally correct Triton code that passes provided test cases.
+
+- **Source:** [TritonBench](https://github.com/thunlp/TritonBench)
+- **Channels:** G (GitHub-sourced kernels, 462 tasks) and T (PyTorch-to-Triton translation, 161 tasks)
+- **Difficulty levels:** 1-5 (G channel) — from simple element-wise ops to complex fused kernels
+- **Instruction modes:** `simple` (brief description) or `complex` (detailed spec with API hints) — G channel only
+- **Metrics:** Call accuracy (code compiles and runs), execution accuracy (output matches reference), per-difficulty breakdown
+
+```bash
+# G channel — complex instructions
+python evaluation.py --benchmark trib --agent-type funca --instruction-mode complex --max-samples 5
+
+# T channel (PyTorch-to-Triton translation)
+python evaluation.py --benchmark trib --agent-type funca --channel T --max-samples 5
+
+# Full run with custom settings
+python evaluation.py --benchmark trib --agent-type funca --channel G \
+    --instruction-mode complex --difficulty 3 \
+    --max-iterations 32 --temperature 0.2 --max-samples 20
+
+# Export results to custom path
+python evaluation.py --benchmark trib --agent-type funca --output results/trib_custom.json
+```
+
+### 5. Data Generation Quality (AIME / LLM Judge)
 
 Evaluates the quality of **AI-generated math problems** using LLM-as-a-judge, with AIME (American Invitational Mathematics Examination) problems as the reference dataset.
 
@@ -764,97 +685,118 @@ Results are saved to the `results/` directory by default.
 
 ---
 
-## Project Structure
+## Experiment
 
+We evaluate three agent configurations — **ReAct Agent**, **FunctionCall Agent**, and **Agent Swarm** (multi-agent) — on four benchmarks using the **Qwen3.5-30B-A3B** open-source model served locally via vLLM.
+
+### Experimental Setup
+
+| Item | Configuration |
+|---|---|
+| **Model** | Qwen/Qwen3.5-30B-A3B (MoE, 30B total / 3B active params) |
+| **Serving** | vLLM with tensor-parallel-size 2, GPU memory utilization 0.90 |
+| **Temperature** | 0.2 (low randomness for reproducibility) |
+| **Max Iterations** | 32 (single-agent), 20 per worker / 8 rounds (swarm) |
+| **Context Budget** | 32768 tokens |
+
+### Results
+
+#### BFCL — Function Calling Accuracy
+
+BFCL uses direct LLM invocation (single-shot) rather than the full agent loop, so results reflect the underlying model's function-calling capability. The primary metric is AST-matching accuracy.
+
+**Core Categories (Single-Turn)**
+
+| Category | Qwen3.5-30B-A3B |
+|---|---|
+| `simple_python`     | 93.25% (373/400) |
+| `simple_java`       | 79.00% (79/100) |
+| `simple_javascript` | 70.00% (35/50) |
+| `multiple`          | 93.50% (187/200) |
+| `parallel`          | 91.50% (183/200) |
+| `parallel_multiple` | 89.00% (178/200) |
+
+**Live (Real-World) Categories**
+
+| Category | Qwen3.5-30B-A3B |
+|---|---|
+| `live_simple`            | 81.78% (211/258) |
+| `live_multiple`          | 79.30% (835/1053) |
+| `live_parallel`          | 87.50% (14/16) |
+| `live_parallel_multiple` | 83.33% (20/24) |
+
+**Multi-Turn & Agentic Categories**
+
+| Category | Qwen3.5-30B-A3B |
+|---|---|
+| `multi_turn_base`         |  |
+| `multi_turn_miss_func`    |  |
+| `multi_turn_miss_param`   |  |
+| `multi_turn_long_context` |  |
+
+**Overall**
+
+| Metric | Qwen3.5-30B-A3B |
+|---|---|
+| **Avg. Accuracy (All Categories)** | |
+
+#### SWE-bench Verified — Real-World Issue Resolution
+
+| Metric | ReAct Agent | FunctionCall Agent | Agent Swarm |
+|---|---|---|---|
+| Resolved Rate   |  |  |  |
+| Exact Match     |  |  |  |
+| Avg. Steps Used |  |  |  |
+
+#### TritonBench — GPU Kernel Generation (G Channel, Complex Instructions)
+
+| Metric | ReAct Agent | FunctionCall Agent |
+|---|---|---|
+| Call Accuracy (code runs) |  |  |
+| Execution Accuracy (output matches) |  |  |
+| Avg. Score |  |  |
+
+#### GAIA — General AI Assistant Capability
+
+| Level | ReAct Agent | FunctionCall Agent |
+|---|---|---|
+| Level 1 | | |
+| Level 2 | | |
+| Level 3 | | |
+| **Overall** | | |
+
+### Reproducing the Experiments
+
+All experiments can be reproduced with the provided `experiments.sh` script:
+
+```bash
+# Run all experiments (results saved to results/ and experiments_output.txt)
+bash experiments.sh 2>&1 | tee experiments_output.txt
+
+# Or run individual benchmarks:
+# BFCL (16 categories: core + live + multi-turn)
+python evaluation.py -b bfcl -c simple_python -n 50 --temperature 0.2
+python evaluation.py -b bfcl -c multiple -n 50 --temperature 0.2
+python evaluation.py -b bfcl -c parallel -n 50 --temperature 0.2
+python evaluation.py -b bfcl -c multi_turn_base -n 50 --temperature 0.2
+# ... see experiments.sh for the full list of 16 categories
+
+# SWE-bench Verified
+python evaluation.py -b swev --agent-type react -n 20 --max-iterations 32 --temperature 0.2
+python evaluation.py -b swev --agent-type funca -n 20 --max-iterations 32 --temperature 0.2
+
+# TritonBench (G channel, complex instructions)
+python evaluation.py -b trib --agent-type react --channel G --instruction-mode complex -n 20 --temperature 0.2
+python evaluation.py -b trib --agent-type funca --channel G --instruction-mode complex -n 20 --temperature 0.2
+
+# GAIA
+python evaluation.py -b gaia --level 1 -n 30 --temperature 0.2
+python evaluation.py -b gaia --level 2 -n 30 --temperature 0.2
+python evaluation.py -b gaia --level 3 -n 30 --temperature 0.2
 ```
-CodingAgent/
-├── code/
-│   ├── agents/                # Agent implementations
-│   │   ├── react_agent.py           # ReAct loop + debug loop + multi-turn messages + reflection
-│   │   ├── function_call_agent.py   # OpenAI function calling + parallel tool dispatch
-│   │   ├── reflection_agent.py      # Self-critique with robust stop detection
-│   │   ├── plan_solve_agent.py      # Decompose-then-execute with multi-strategy parsing
-│   │   ├── simple_agent.py          # Lightweight conversational agent
-│   │   ├── tool_aware_agent.py      # SimpleAgent with tool call monitoring
-│   │   └── prompts/
-│   │       ├── react.prompt         # ReAct format instructions
-│   │       ├── debug.prompt         # Structured debug protocol template
-│   │       └── ...                  # Other agent prompt templates
-│   ├── core/                  # LLM abstraction, base classes, config
-│   │   ├── agent.py                 # Base agent with context compaction, rich history,
-│   │   │                            #   session persistence & debug-aware printing
-│   │   ├── llm.py                   # Multi-provider LLM client with cached async
-│   │   ├── config.py                # Env-driven configuration
-│   │   ├── message.py               # Message dataclass
-│   │   ├── exceptions.py            # Custom exceptions
-│   │   └── database_config.py       # Database configuration
-│   ├── tools/
-│   │   ├── base.py            # Tool ABC, @tool_action decorator
-│   │   ├── registry.py        # ToolRegistry
-│   │   ├── async_executor.py  # Async tool execution
-│   │   ├── chain.py           # Tool chaining
-│   │   └── builtin/           # Built-in tools
-│   │       ├── file_tool.py
-│   │       ├── code_execution_tool.py   # + shell command blocklist
-│   │       ├── code_search_tool.py      # + AST-based structural queries
-│   │       ├── test_runner_tool.py
-│   │       ├── git_tool.py
-│   │       ├── linter_tool.py
-│   │       ├── profiler_tool.py
-│   │       ├── terminal_tool.py
-│   │       ├── calculator.py
-│   │       ├── search_tool.py
-│   │       ├── memory_tool.py
-│   │       ├── note_tool.py
-│   │       ├── rag_tool.py
-│   │       ├── mcp_wrapper_tool.py
-│   │       ├── protocol_tools.py
-│   │       ├── rl_training_tool.py
-│   │       └── ...                      # Evaluation-specific tools
-│   ├── utils/                 # Shared utilities
-│   │   ├── helpers.py
-│   │   ├── logging.py
-│   │   ├── serialization.py
-│   │   ├── subprocess_utils.py
-│   │   └── trajectory.py
-│   ├── memory/                # Memory systems (working memory with cached TF-IDF)
-│   ├── context/               # Context engineering (cached token counting)
-│   ├── protocols/             # MCP, A2A, ANP
-│   ├── rl/                    # Reinforcement learning
-│   └── evaluation/            # Benchmarks (BFCL, GAIA, SWE-bench, Data Generation)
-│       └── benchmarks/
-│           ├── bfcl/                # Tool calling accuracy evaluation
-│           ├── gaia/                # General AI assistant evaluation
-│           ├── swe/                 # SWE-bench / SWE-bench Verified evaluation
-│           └── data_generation/     # LLM Judge & Win Rate evaluation
-├── prompts/                   # System & task prompts (for multi-agent workers)
-│   ├── system.prompt                # Shared system prompt
-│   ├── orchestrator.prompt          # Orchestrator text-mode prompt
-│   ├── orchestrator_fc.prompt       # Orchestrator function-calling prompt
-│   ├── context_compaction.prompt    # Context compaction summary template
-│   ├── execution_summary.prompt     # Per-run execution summary template
-│   ├── code_review.prompt           # Review worker prompt
-│   ├── test_generation.prompt       # Test worker prompt
-│   ├── optimization.prompt          # Optimization worker prompt
-│   ├── debug.prompt                 # Debug worker prompt
-│   └── ...
-├── data/                      # Datasets (downloaded separately)
-│   ├── BFCL/                        # BFCL test data + ground truth
-│   ├── GAIA/                        # GAIA questions + attached files
-│   ├── SWEV/                        # SWE-bench Verified instances (500)
-│   ├── AIME/                        # AIME math problems
-│   ├── KodCode/                     # KodCode dataset
-│   └── xCode/                       # xCode dataset (batch mode input)
-├── inference.py               # Single-agent entry point — ReAct (REPL / batch)
-├── tool_agent.py              # Single-agent entry point — Function Calling (REPL / batch)
-├── run_multi.py               # Multi-agent entry point (orchestrator + workers)
-├── evaluation.py              # Evaluation runner for all benchmarks
-├── results/                   # Evaluation and inference results
-│   └── sessions/              # Saved session history files (JSON)
-├── examples/                  # Usage examples
-├── tests/                     # Test suite
-└── docs/                      # Documentation
-```
+
+
+---
 
 ## License
 
