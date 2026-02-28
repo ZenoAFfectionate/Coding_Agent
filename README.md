@@ -75,13 +75,20 @@ LLM_BASE_URL=your-api-base-url
 For local model deployment (e.g., with vLLM):
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 vllm serve Qwen/Qwen3.5-35B-A3B \
-    --tensor-parallel-size 2 \
+CUDA_VISIBLE_DEVICES=0 vllm serve Qwen/Qwen3.5-35B-A3B-FP8 \
     --port 8000 \
     --gpu-memory-utilization 0.90 \
-    --language-model-only \
     --reasoning-parser qwen3 \
     --enable-auto-tool-choice \
+    --tool-call-parser qwen3_coder
+```
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sglang.launch_server \
+    --model-path Qwen/Qwen3.5-35B-A3B-FP8 \
+    --port 8000 \
+    --mem-fraction-static 0.9 \
+    --reasoning-parser qwen3 \
     --tool-call-parser qwen3_coder
 ```
 

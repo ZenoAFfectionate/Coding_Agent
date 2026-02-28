@@ -78,7 +78,6 @@ class SWEEvaluator:
         # Load benchmark-specific prompts
         self.system_prompt = _load_prompt(EVAL_PROMPTS_DIR / "swev_system.prompt")
         self.task_template = _load_prompt(EVAL_PROMPTS_DIR / "swev_task.prompt")
-        self.reflection_prompt = _load_prompt(EVAL_PROMPTS_DIR / "swev_reflection.prompt")
 
     def evaluate(
         self,
@@ -159,6 +158,7 @@ class SWEEvaluator:
             t = last.get("execution_time", 0)
             overlap = last.get("patch_metrics", {}).get("line_overlap", 0)
             print(f"     -> {status} | {reason} | {steps} steps | {t:.1f}s | overlap={overlap:.0%}")
+            print()  # blank line between instances
 
         # Compute aggregate metrics
         overall_metrics = self.metrics.compute_metrics(results)
@@ -219,21 +219,21 @@ class SWEEvaluator:
             workspace = self._setup_repo(sample)
 
             # 2. Create agent (workspace points to the cloned repo)
-            # Inject benchmark-specific system prompt and reflection prompt
             factory_kwargs = dict(agent_kwargs)
             if self.system_prompt:
                 factory_kwargs["system_prompt"] = self.system_prompt
-            if self.reflection_prompt:
-                factory_kwargs["reflection_prompt"] = self.reflection_prompt
-            # Disable reflection for SWE-bench: the reflection LLM cannot see
-            # git diff output, so it falsely rejects correct patches and causes
-            # the agent to undo its own correct edits.
-            factory_kwargs["enable_reflection"] = False
-            # Remove code_exec from the agent's toolset for SWE-bench:
-            # repo dependencies are not installed so code execution will
-            # fail and waste steps.  The evaluator handles test running
-            # separately via _run_tests().
-            factory_kwargs.setdefault("exclude_tools", []).append("code_exec")
+            # Exclude execution tools for SWE-bench: repo dependencies are not
+            # installed, so both code_exec and test_runner will always raise
+            # ImportErrors (e.g. "No module named 'erfa'") and waste steps.
+            # The evaluator handles test verification separately via _run_tests().
+            for tool in ("code_exec", "test_runner"):
+                factory_kwargs.setdefault("exclude_tools", []).append(tool)
+            # Use lenient text-only policy for SWE-bench: the model is free to
+            # return text-only responses at any point (states A/B pass through).
+            # Only nudge when confirmed edits exist but the model returned an
+            # empty response (state C), because that likely means the model
+            # finished thinking without calling `finish` explicitly.
+            factory_kwargs.setdefault("text_only_policy", "lenient")
             agent = agent_factory(workspace=str(workspace), **factory_kwargs)
 
             # 3. Build prompt

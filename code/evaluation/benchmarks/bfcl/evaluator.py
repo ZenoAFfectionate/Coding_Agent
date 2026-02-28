@@ -979,6 +979,48 @@ class BFCLEvaluator:
 
         return success, score
 
+    @staticmethod
+    def _sort_call_keywords(node: ast.Call) -> None:
+        """Sort keyword arguments of an ``ast.Call`` node by name (in-place).
+
+        This makes ``f(b=2, a=1)`` and ``f(a=1, b=2)`` produce identical
+        ``ast.dump`` output, so keyword order no longer affects matching.
+        """
+        node.keywords.sort(key=lambda kw: (kw.arg or ""))
+
+    @staticmethod
+    def _infer_positional_to_keyword(
+        call_node: ast.Call,
+        reference_node: ast.Call,
+    ) -> None:
+        """Promote positional args to keyword args by borrowing names from *reference_node*.
+
+        If *call_node* has positional args and *reference_node* has only keyword
+        args (or vice-versa), use the keyword names from the keyword side to
+        label the positional side.  This handles the common mismatch where the
+        ground truth uses ``sort('file.pdf')`` but the model produces
+        ``sort(file_name='file.pdf')`` even when no ``func_params_lookup`` is
+        available.
+        """
+        def _apply(positional: ast.Call, keyword: ast.Call) -> None:
+            if not positional.args:
+                return
+            kw_names = [kw.arg for kw in keyword.keywords if kw.arg]
+            new_kws = list(positional.keywords)
+            for idx, arg in enumerate(positional.args):
+                if idx < len(kw_names):
+                    new_kws.append(ast.keyword(arg=kw_names[idx], value=arg))
+                else:
+                    return  # can't map all positional args; bail out
+            positional.args = []
+            positional.keywords = new_kws
+
+        # Determine which side has positional args
+        if call_node.args and not reference_node.args and reference_node.keywords:
+            _apply(call_node, reference_node)
+        elif reference_node.args and not call_node.args and call_node.keywords:
+            _apply(reference_node, call_node)
+
     def _ast_strings_match(
         self,
         pred: str,
@@ -987,8 +1029,12 @@ class BFCLEvaluator:
     ) -> bool:
         """Compare whether two function call strings match at the AST level.
 
-        When *func_params_lookup* is supplied, both strings are first
-        normalised so that positional args become keyword args.
+        Handles two common benign mismatches automatically:
+        1. **Positional vs keyword args** — ``sort('f.pdf')`` matches
+           ``sort(file_name='f.pdf')`` when the parameter mapping is known
+           (via *func_params_lookup*) or can be inferred from the other side.
+        2. **Keyword argument order** — ``f(a=1, b=2)`` matches ``f(b=2, a=1)``
+           by sorting keywords before comparison.
         """
         if func_params_lookup is None:
             func_params_lookup = {}
@@ -1000,6 +1046,16 @@ class BFCLEvaluator:
         try:
             pred_ast = ast.parse(pred, mode='eval')
             exp_ast = ast.parse(expected, mode='eval')
+
+            pred_node = pred_ast.body
+            exp_node = exp_ast.body
+
+            # Infer positional→keyword mapping from the other side if possible
+            if isinstance(pred_node, ast.Call) and isinstance(exp_node, ast.Call):
+                self._infer_positional_to_keyword(pred_node, exp_node)
+                self._sort_call_keywords(pred_node)
+                self._sort_call_keywords(exp_node)
+
             return ast.dump(pred_ast) == ast.dump(exp_ast)
         except Exception:
             return pred.strip() == expected.strip()

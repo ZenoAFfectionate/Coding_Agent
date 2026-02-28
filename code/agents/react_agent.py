@@ -7,7 +7,6 @@ function calling (e.g. Qwen-Thinking series, local models, etc.).
 Key features:
 - Tool output truncation & context budget management
 - Automatic debug loop on tool errors
-- Reflection / self-verification before final answer (text-based)
 - Structured logging & trajectory tracking
 """
 
@@ -58,28 +57,6 @@ class ReActAgent(Agent):
     - ``Action: Finish[answer]``       — to complete the task
     """
 
-    # Default reflection prompt used when no external template is provided.
-    _DEFAULT_REFLECTION_PROMPT = (
-        "You are a critical quality reviewer for a coding agent. "
-        "Evaluate whether the proposed answer fully and correctly "
-        "addresses the user's question.\n\n"
-        "Check for:\n"
-        "1. **Completeness** — are all parts addressed?\n"
-        "2. **Correctness** — any errors or contradictions?\n"
-        "3. **Verification** — if code was required, was it written to a file and tested?\n"
-        "{verification_note}\n\n"
-        "## Agent activity\n"
-        "- **Files written**: {files_written}\n"
-        "- **Tests executed**: {tests_executed}\n"
-        "- **Tools used**: {tools_summary}\n\n"
-        "## Original question\n{question}\n\n"
-        "## Proposed answer\n{proposed_answer}\n\n"
-        "Respond in EXACTLY this format:\n"
-        "Verdict: APPROVED or NEEDS_REVISION\n"
-        "Reasoning: <one sentence>\n"
-        "Issues: <specific issues, or \"none\" if approved>"
-    )
-
     def __init__(
         self,
         name: str,
@@ -91,9 +68,6 @@ class ReActAgent(Agent):
         max_tool_output_chars: int = 8000,
         max_debug_attempts: int = 3,
         enable_debug_loop: bool = True,
-        enable_reflection: bool = True,
-        max_reflection_retries: int = 2,
-        reflection_prompt: Optional[str] = None,
         enable_planning: bool = False,
         **kwargs,
     ):
@@ -103,10 +77,6 @@ class ReActAgent(Agent):
         self.max_steps = max_steps
         self.max_tool_output_chars = max_tool_output_chars
         self.max_debug_attempts = max_debug_attempts
-        self.enable_debug_loop = enable_debug_loop
-        self.enable_reflection = enable_reflection
-        self.max_reflection_retries = max_reflection_retries
-        self._reflection_prompt_template = reflection_prompt or self._DEFAULT_REFLECTION_PROMPT
         self.enable_debug_loop = enable_debug_loop
         self._debug_prompt_template = load_agent_prompt("debug") if enable_debug_loop else ""
         self._react_prompt_template = load_agent_prompt("react")
@@ -240,99 +210,12 @@ class ReActAgent(Agent):
         ]
 
     # ------------------------------------------------------------------ #
-    #  Reflection (text-based)
-    # ------------------------------------------------------------------ #
-
-    def _reflect_on_answer(
-        self,
-        question: str,
-        proposed_answer: str,
-        wrote_code: bool,
-        ran_tests: bool,
-        tools_used: List[str],
-        files_written: List[str] = None,
-    ) -> Tuple[bool, str]:
-        """Self-verify the proposed answer via a separate LLM call.
-
-        Returns ``(True, answer)`` if approved, ``(False, feedback)`` otherwise.
-        """
-        verification_note = ""
-        if wrote_code and not ran_tests:
-            verification_note = (
-                "\n\n**IMPORTANT**: The agent wrote code but did NOT execute it "
-                "or run any tests. You should NOT approve if the task required "
-                "working code. Reject and ask the agent to test with code_exec."
-            )
-
-        tools_summary = ", ".join(tools_used) or "none"
-        files_written_str = ", ".join(files_written) if files_written else "none"
-        tests_executed_str = "yes" if ran_tests else "no"
-        prompt = self._reflection_prompt_template.format(
-            verification_note=verification_note,
-            question=question,
-            proposed_answer=proposed_answer,
-            tools_summary=tools_summary,
-            files_written=files_written_str,
-            tests_executed=tests_executed_str,
-        )
-
-        if self.logger:
-            self.logger.info("Reflection started", wrote_code=wrote_code,
-                             ran_tests=ran_tests, tools_used=tools_summary)
-
-        try:
-            if self.trajectory is not None:
-                self.trajectory.start_timer()
-
-            response = self.llm.invoke([{"role": "user", "content": prompt}])
-            duration = self.trajectory.stop_timer() if self.trajectory else None
-
-            if self.logger:
-                self.logger.llm_call(model=self.llm.model,
-                                     latency_ms=duration or 0, call_type="reflection")
-
-            if not response:
-                return True, proposed_answer
-
-            text = self._strip_think_tags(response)
-            approved = "APPROVED" in text.upper() and "NEEDS_REVISION" not in text.upper()
-
-            reasoning_m = re.search(r"Reasoning:\s*(.+?)(?=\nIssues:|\Z)", text, re.DOTALL)
-            issues_m = re.search(r"Issues:\s*(.+)", text, re.DOTALL)
-            reasoning = reasoning_m.group(1).strip() if reasoning_m else text[:200]
-            issues = issues_m.group(1).strip() if issues_m else ""
-
-            verdict = "APPROVED" if approved else "NEEDS REVISION"
-            self._print(f"  Reflection: {verdict} — {reasoning}")
-            self._track("reflection", f"approved={approved}: {reasoning}")
-            if self.logger:
-                self.logger.info(f"Reflection verdict: {verdict}",
-                                 approved=approved, reasoning=reasoning,
-                                 issues=issues, latency_ms=duration)
-
-            if approved:
-                return True, proposed_answer
-
-            return False, (
-                "Your proposed answer was reviewed and found to have issues:\n"
-                f"{issues or reasoning}\n\n"
-                "Please address these issues and provide a revised answer."
-            )
-
-        except Exception as e:
-            self._print(f"  Reflection failed ({e}), approving by default.")
-            if self.logger:
-                self.logger.error(f"Reflection failed: {e}")
-            return True, proposed_answer
-
-    # ------------------------------------------------------------------ #
     #  Main loop
     # ------------------------------------------------------------------ #
 
     def run(self, input_text: str, *, enable_planning: bool | None = None, **kwargs) -> str:
         """Run the ReAct loop with text-based Thought/Action parsing."""
         step = 0
-        reflection_attempts = 0
         history: List[str] = []
         tools_used: List[str] = []
         wrote_code = False
@@ -455,24 +338,6 @@ class ReActAgent(Agent):
             if action.startswith("Finish"):
                 m = re.match(r"Finish\[(.+)\]$", action, re.DOTALL)
                 proposed = m.group(1).strip() if m else ""
-                self._print(f"  Finish proposed: {proposed[:200]}...")
-
-                if self.enable_reflection and reflection_attempts < self.max_reflection_retries:
-                    approved, feedback = self._reflect_on_answer(
-                        input_text, proposed, wrote_code, ran_tests, tools_used,
-                        files_written=files_written,
-                    )
-                    if not approved:
-                        reflection_attempts += 1
-                        self._track("reflection_revise",
-                                    f"attempt {reflection_attempts}/{self.max_reflection_retries}",
-                                    step=step)
-                        history.extend([
-                            f"Thought: {thought or ''}",
-                            "Action: Finish[...]",
-                            f"Observation: {feedback}",
-                        ])
-                        continue
 
                 self._print(f"  Final answer: {proposed}", level="info")
                 self._track("final_answer", proposed)
@@ -513,7 +378,7 @@ class ReActAgent(Agent):
                 self.logger.tool_call(tool=tool_name, result=observation,
                                       latency_ms=tool_ms or 0)
 
-            # Track usage for reflection
+            # Track tool usage
             if tool_name not in tools_used:
                 tools_used.append(tool_name)
             if tool_name == "file" and ('"write"' in tool_args or '"edit"' in tool_args):

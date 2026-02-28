@@ -204,7 +204,10 @@ class TritonBenchEvaluator:
             factory_kwargs = dict(agent_kwargs)
             if self.system_prompt:
                 factory_kwargs["system_prompt"] = self.system_prompt
-            factory_kwargs["enable_reflection"] = False
+            # Use lenient text-only policy: only nudge when the model has
+            # written code but returned an empty response (likely forgot to
+            # call finish).  Allow text-only responses during exploration.
+            factory_kwargs.setdefault("text_only_policy", "lenient")
             agent = agent_factory(workspace=str(workspace), **factory_kwargs)
 
             # 3. Build prompt
@@ -329,8 +332,12 @@ class TritonBenchEvaluator:
         """Build the task prompt for the agent.
 
         Uses channel-specific templates if available.
+        Injects the API specification extracted from gold code.
         """
         channel = sample.get("channel", "G")
+        api_spec = sample.get("api_spec", "")
+        if not api_spec:
+            api_spec = "(No API specification available — infer from the task description.)"
 
         if channel == "T" and self.task_template_t:
             return self.task_template_t.format(
@@ -340,23 +347,26 @@ class TritonBenchEvaluator:
                 math=sample.get("math", ""),
                 torch_code=sample.get("torch_code", ""),
                 example=sample.get("example", ""),
+                api_spec=api_spec,
             )
 
         if channel == "G" and self.task_template_g:
             return self.task_template_g.format(
                 instruction=sample.get("instruction", ""),
+                api_spec=api_spec,
             )
 
-        # Fallback: inline prompt
+        # Fallback: inline prompt with API spec
         instruction = sample.get("instruction", "")
         return (
             f"## Task: Write a Triton GPU Kernel\n\n"
             f"{instruction}\n\n"
+            f"## Required API\n\n{api_spec}\n\n"
             f"## Requirements\n"
             f"- Write complete, runnable Triton code including all imports "
             f"(torch, triton, triton.language as tl).\n"
-            f"- Include both the @triton.jit kernel function(s) AND the Python "
-            f"wrapper function(s) that launch them.\n"
+            f"- You MUST use the exact function names, class names, parameter names, "
+            f"and module-level aliases listed above.\n"
             f"- Save the code as `solution.py` using the file tool.\n"
             f"- Do NOT include any test code or main blocks.\n"
         )

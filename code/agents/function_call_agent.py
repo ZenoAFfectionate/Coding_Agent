@@ -4,7 +4,6 @@ Production-grade agent with:
 - Native function calling via ``llm.invoke_with_tools()``
 - Tool output truncation & context budget management
 - Automatic debug loop on tool errors
-- Reflection / self-verification before final answer
 - Structured logging & trajectory tracking
 - Parallel tool execution for batched calls
 """
@@ -111,23 +110,46 @@ class _CircuitBreakerState:
 
 @dataclass
 class _UsageState:
-    """Mutable tracking state for reflection."""
+    """Mutable tracking state for tool usage."""
     tools_used: list[str] = field(default_factory=list)
     files_written: list[str] = field(default_factory=list)
+    files_confirmed_edited: list[str] = field(default_factory=list)
     wrote_code: bool = False
     ran_tests: bool = False
 
-    def update(self, tool_name: str, arguments: dict[str, Any]) -> None:
-        """Update tracking state after a tool call."""
+    def update(self, tool_name: str, arguments: dict[str, Any], result: str = "") -> None:
+        """Update tracking state after a tool call.
+
+        Args:
+            tool_name: Name of the tool that was called.
+            arguments: Parsed arguments passed to the tool.
+            result: The tool's return value (used to verify success).
+        """
         if tool_name not in self.tools_used:
             self.tools_used.append(tool_name)
-        if tool_name == "file" and arguments.get("action") in ("write", "edit"):
+        if tool_name == "file" and arguments.get("action") in ("write", "edit", "str_replace"):
             self.wrote_code = True
             path = arguments.get("path", "")
             if path and path not in self.files_written:
                 self.files_written.append(path)
+            # Only count as a confirmed edit when the tool did not return an error.
+            # Successful file-tool results do NOT start with "Error:" (case-insensitive).
+            result_start = result.lstrip()[:7].lower()
+            if result_start != "error: " and "error:" not in result.lower()[:30]:
+                if path and path not in self.files_confirmed_edited:
+                    self.files_confirmed_edited.append(path)
         if tool_name in ("code_exec", "test_runner"):
             self.ran_tests = True
+
+    @property
+    def confirmed_edits(self) -> int:
+        """Number of files with at least one confirmed successful edit."""
+        return len(self.files_confirmed_edited)
+
+    @property
+    def exploration_depth(self) -> int:
+        """Number of distinct tool names that have been used."""
+        return len(self.tools_used)
 
 
 def _map_parameter_type(param_type: str) -> str:
@@ -138,28 +160,6 @@ def _map_parameter_type(param_type: str) -> str:
     return "string"
 
 
-# Default reflection prompt (same as ReActAgent).
-_DEFAULT_REFLECTION_PROMPT = (
-    "You are a critical quality reviewer for a coding agent. "
-    "Evaluate whether the proposed answer fully and correctly "
-    "addresses the user's question.\n\n"
-    "Check for:\n"
-    "1. **Completeness** — are all parts addressed?\n"
-    "2. **Correctness** — any errors or contradictions?\n"
-    "3. **Verification** — if code was required, was it written to a file and tested?\n"
-    "{verification_note}\n\n"
-    "## Agent activity\n"
-    "- **Files written**: {files_written}\n"
-    "- **Tests executed**: {tests_executed}\n"
-    "- **Tools used**: {tools_summary}\n\n"
-    "## Original question\n{question}\n\n"
-    "## Proposed answer\n{proposed_answer}\n\n"
-    "Respond in EXACTLY this format:\n"
-    "Verdict: APPROVED or NEEDS_REVISION\n"
-    "Reasoning: <one sentence>\n"
-    "Issues: <specific issues, or \"none\" if approved>"
-)
-
 _DEFAULT_PLANNING_PROMPT = load_agent_prompt("funca_planning")
 
 
@@ -168,7 +168,7 @@ class FunctionCallAgent(Agent):
 
     Uses ``llm.invoke_with_tools()`` for structured tool invocation and
     includes the same production features as ``ReActAgent``: trajectory
-    tracking, reflection, debug loop, and tool output truncation.
+    tracking, debug loop, and tool output truncation.
     """
 
     def __init__(
@@ -183,12 +183,16 @@ class FunctionCallAgent(Agent):
         # Production parameters (match ReActAgent interface)
         max_steps: int = 32,
         max_tool_output_chars: int = 8000,
-        enable_reflection: bool = True,
-        max_reflection_retries: int = 2,
-        reflection_prompt: str | None = None,
         enable_debug_loop: bool = True,
         max_debug_attempts: int = 3,
         enable_planning: bool = False,
+        # Controls when text-only responses are accepted vs. nudged back to tools.
+        # "strict"  – nudge the model whenever it hasn't made confirmed file edits yet
+        #             (states A, B, C all trigger nudges).  Best for code-repair tasks.
+        # "lenient" – only nudge when confirmed edits exist but the answer is empty
+        #             (state C).  States A/B are passed through immediately.
+        # "off"     – never nudge; accept any text-only response as a final answer.
+        text_only_policy: str = "strict",
         # Legacy alias
         max_tool_iterations: int | None = None,
         # Base Agent pass-through
@@ -206,11 +210,11 @@ class FunctionCallAgent(Agent):
             self.max_steps = max_steps
 
         self.max_tool_output_chars = max_tool_output_chars
-        self.enable_reflection = enable_reflection
-        self.max_reflection_retries = max_reflection_retries
-        self._reflection_prompt_template = reflection_prompt or _DEFAULT_REFLECTION_PROMPT
         self.enable_debug_loop = enable_debug_loop
         self.max_debug_attempts = max_debug_attempts
+        if text_only_policy not in ("strict", "lenient", "off"):
+            raise ValueError(f"text_only_policy must be 'strict', 'lenient', or 'off', got {text_only_policy!r}")
+        self.text_only_policy = text_only_policy
         self.enable_planning = enable_planning
         self._debug_prompt_template = load_agent_prompt("debug") if enable_debug_loop else ""
 
@@ -347,6 +351,26 @@ class FunctionCallAgent(Agent):
                     parts.append(text)
             return "".join(parts)
         return str(raw_content)
+
+    @staticmethod
+    def _extract_think_content(text: str) -> str:
+        """Extract the thinking content from ``<think>...</think>`` blocks.
+
+        Returns the concatenated thinking text (without tags), or "" if none.
+        Handles both standard ``<think>...</think>`` and orphaned ``</think>``
+        (missing opening tag, common with vLLM).
+        """
+        # Standard: extract from complete <think>...</think> blocks.
+        parts = re.findall(r"<think>(.*?)</think>", text, flags=re.DOTALL)
+        if parts:
+            return "\n".join(p.strip() for p in parts if p.strip())
+        # Fallback: orphaned </think> — everything before it is thinking.
+        if "</think>" in text:
+            thinking = text.rsplit("</think>", 1)[0].strip()
+            # Remove a leading <think> if present but unclosed
+            thinking = re.sub(r"^<think>\s*", "", thinking)
+            return thinking
+        return ""
 
     @staticmethod
     def _strip_think_tags(text: str) -> str:
@@ -561,89 +585,6 @@ class FunctionCallAgent(Agent):
         )
 
     # ------------------------------------------------------------------ #
-    #  Reflection
-    # ------------------------------------------------------------------ #
-
-    def _reflect_on_answer(
-        self,
-        question: str,
-        proposed_answer: str,
-        usage: _UsageState,
-    ) -> tuple[bool, str]:
-        """Self-verify the proposed answer via a separate LLM call.
-
-        Returns ``(True, answer)`` if approved, ``(False, feedback)`` otherwise.
-        """
-        verification_note = ""
-        if usage.wrote_code and not usage.ran_tests:
-            verification_note = (
-                "\n\n**IMPORTANT**: The agent wrote code but did NOT execute it "
-                "or run any tests. You should NOT approve if the task required "
-                "working code. Reject and ask the agent to test with code_exec."
-            )
-
-        tools_summary = ", ".join(usage.tools_used) or "none"
-        files_written_str = ", ".join(usage.files_written) if usage.files_written else "none"
-        tests_executed_str = "yes" if usage.ran_tests else "no"
-        prompt = self._reflection_prompt_template.format(
-            verification_note=verification_note,
-            question=question,
-            proposed_answer=proposed_answer,
-            tools_summary=tools_summary,
-            files_written=files_written_str,
-            tests_executed=tests_executed_str,
-        )
-
-        if self.logger:
-            self.logger.info("Reflection started", wrote_code=usage.wrote_code,
-                             ran_tests=usage.ran_tests, tools_used=tools_summary)
-
-        try:
-            if self.trajectory is not None:
-                self.trajectory.start_timer()
-
-            response = self.llm.invoke([{"role": "user", "content": prompt}])
-            duration = self.trajectory.stop_timer() if self.trajectory else None
-
-            if self.logger:
-                self.logger.llm_call(model=self.llm.model,
-                                     latency_ms=duration or 0, call_type="reflection")
-
-            if not response:
-                return True, proposed_answer
-
-            text = self._strip_think_tags(response)
-            approved = "APPROVED" in text.upper() and "NEEDS_REVISION" not in text.upper()
-
-            reasoning_m = re.search(r"Reasoning:\s*(.+?)(?=\nIssues:|\Z)", text, re.DOTALL)
-            issues_m = re.search(r"Issues:\s*(.+)", text, re.DOTALL)
-            reasoning = reasoning_m.group(1).strip() if reasoning_m else text[:200]
-            issues = issues_m.group(1).strip() if issues_m else ""
-
-            verdict = "APPROVED" if approved else "NEEDS REVISION"
-            self._print(f"  Reflection: {verdict} -- {reasoning}")
-            self._track("reflection", f"approved={approved}: {reasoning}")
-            if self.logger:
-                self.logger.info(f"Reflection verdict: {verdict}",
-                                 approved=approved, reasoning=reasoning,
-                                 issues=issues, latency_ms=duration)
-
-            if approved:
-                return True, proposed_answer
-
-            return False, (
-                "Your proposed answer was reviewed and found to have issues:\n"
-                f"{issues or reasoning}\n\n"
-                "Please address these issues and provide a revised answer."
-            )
-
-        except Exception as e:
-            self._print(f"  Reflection failed ({e}), approving by default.")
-            if self.logger:
-                self.logger.error(f"Reflection failed: {e}")
-            return True, proposed_answer
-
-    # ------------------------------------------------------------------ #
     #  Bookkeeping
     # ------------------------------------------------------------------ #
 
@@ -679,7 +620,8 @@ class FunctionCallAgent(Agent):
         """Run the function-calling conversation loop with full production features."""
         # --- Initialise tracking state ---
         step = 0
-        reflection_attempts = 0
+        text_only_retries = 0
+        _MAX_TEXT_ONLY_RETRIES = 3  # max times to nudge model back to tool use
         usage = _UsageState()
         debug_state = _DebugState()
         cb_state = _CircuitBreakerState()
@@ -858,7 +800,7 @@ class FunctionCallAgent(Agent):
                     if self.logger:
                         self.logger.tool_call(tool=name, result=result, latency_ms=tool_ms or 0)
 
-                    usage.update(name, parsed_args)
+                    usage.update(name, parsed_args, result)
 
                     # --- Finish tool: early exit ---
                     if name == "finish" and result.startswith(FinishTool.SENTINEL):
@@ -925,22 +867,91 @@ class FunctionCallAgent(Agent):
                 continue  # next loop iteration
 
             # ---- Branch: text-only response (proposed answer) ----
-            cleaned_content = self._strip_think_tags(content)
-            self._print(f"  Proposed answer: {cleaned_content}")
 
-            # Reflection
-            if self.enable_reflection and reflection_attempts < self.max_reflection_retries:
-                approved, feedback = self._reflect_on_answer(
-                    input_text, cleaned_content, usage,
+            # Extract and display thinking content before stripping
+            think_content = self._extract_think_content(content)
+            if think_content:
+                self._print(f"  [Thinking] {self._preview(think_content, 1000)}")
+                self._track("thinking", think_content, step=step)
+
+            cleaned_content = self._strip_think_tags(content)
+
+            # ----------------------------------------------------------------
+            # Completion guard — decide whether to accept this text-only
+            # response as the final answer, or nudge the model to keep working.
+            #
+            # Four states, handled in priority order:
+            #
+            #   (A) No exploration, no edits  → must start working
+            #   (B) Explored but no edits     → must actually edit files
+            #   (C) Confirmed edits, empty answer → call finish explicitly
+            #   (D) Confirmed edits, real answer  → accept (task done)
+            #
+            # States A-C each get up to _MAX_TEXT_ONLY_RETRIES nudges before
+            # the agent falls through and accepts whatever it has.
+            # ----------------------------------------------------------------
+
+            confirmed_edits = usage.confirmed_edits       # successful file edits
+            explored_enough = usage.exploration_depth >= 3  # used ≥3 distinct tools
+            answer_is_empty = not cleaned_content.strip()
+            steps_left = iterations_limit - step
+            policy = self.text_only_policy  # "strict" | "lenient" | "off"
+
+            # Determine whether to nudge, and with what message.
+            nudge: str | None = None
+            label = "accepted"
+            if policy != "off" and text_only_retries < _MAX_TEXT_ONLY_RETRIES:
+
+                if confirmed_edits == 0 and not explored_enough and policy == "strict":
+                    # State (A) [strict only]: hasn't even started
+                    nudge = (
+                        "You returned a text response but have not used any tools yet. "
+                        f"You still have {steps_left} steps. "
+                        "Start by exploring the codebase with `file`, `code_search`, or "
+                        "`git` tools — then edit the relevant source files to fix the issue."
+                    )
+                    label = "no-work"
+
+                elif confirmed_edits == 0 and policy == "strict":
+                    # State (B) [strict only]: explored but made no actual file edits
+                    nudge = (
+                        "You have explored the codebase but have NOT made any code changes yet. "
+                        f"You still have {steps_left} steps. "
+                        "Use the `file` tool with action='edit' or action='str_replace' to "
+                        "modify the relevant source file(s) and fix the issue. "
+                        "Do not stop until you have saved at least one edit."
+                    )
+                    label = "explored-no-edits"
+
+                elif confirmed_edits > 0 and answer_is_empty:
+                    # State (C) [strict + lenient]: edits done but empty answer
+                    nudge = (
+                        f"You have edited {confirmed_edits} file(s). "
+                        "Your response was empty — please call the `finish` tool with a "
+                        "brief summary of what you changed as the `result` argument. "
+                        "If you still have changes to make, continue using tools instead."
+                    )
+                    label = "edits-done-empty-answer"
+
+                # State (D): nudge is None → fall through to accept immediately
+
+            if nudge:
+                # Only count nudges that are actually sent to the model.
+                text_only_retries += 1
+                tag = f"{text_only_retries}/{_MAX_TEXT_ONLY_RETRIES}"
+                self._print(
+                    f"  [Nudge {tag} | {label}] {nudge[:120]}...",
+                    level="info",
                 )
-                if not approved:
-                    reflection_attempts += 1
-                    self._track("reflection_revise",
-                                f"attempt {reflection_attempts}/{self.max_reflection_retries}",
-                                step=step)
-                    messages.append({"role": "assistant", "content": cleaned_content})
-                    messages.append({"role": "user", "content": feedback})
-                    continue
+                self._track("text_only_retry",
+                            f"{label} | attempt {tag}", step=step)
+                if content:
+                    messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": nudge})
+                continue
+            # nudge is None → fall through to accept
+
+            self._print(f"  Proposed answer: {cleaned_content}")
 
             # Accepted
             final_response = cleaned_content

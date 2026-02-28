@@ -144,9 +144,9 @@ def run_swev(args):
     print(f"\n{'='*60}")
     print(f"  SWE-bench Results — {split} / {repo_tag} / {args.agent_type}")
     total = results.get("total_samples", 0)
-    resolved = results.get("resolved", results.get("correct_samples", 0))
-    rate = resolved / total if total > 0 else 0
-    print(f"  Resolved rate: {rate:.2%} ({resolved}/{total})")
+    resolved_rate = results.get("resolved_rate", 0.0)
+    exact_matches = results.get("exact_matches", 0)
+    print(f"  Resolved rate: {resolved_rate:.2%} ({exact_matches}/{total})")
     print(f"{'='*60}")
 
     # Save results

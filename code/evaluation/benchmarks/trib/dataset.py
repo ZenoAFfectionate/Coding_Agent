@@ -7,7 +7,11 @@ Triton GPU kernel generation.
 
 from typing import List, Dict, Any, Optional, Union
 from pathlib import Path
+import ast
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Separator used in reference .py files to split gold code from test code
@@ -121,6 +125,7 @@ class TritonBenchDataset:
                 "channel": "G",
                 "instruction": instruction.strip(),
                 "gold_code": gold_code,
+                "api_spec": self._extract_api_spec(gold_code),
                 "test_code": test_code,
                 "reference_file": filename,
                 "repo": raw.get("repo", ""),
@@ -172,6 +177,7 @@ class TritonBenchDataset:
                 "channel": "T",
                 "instruction": instruction,
                 "gold_code": gold_code,
+                "api_spec": self._extract_api_spec(gold_code),
                 "test_code": test_code,
                 "reference_file": filename,
                 "torch_code": raw.get("torch_code", ""),
@@ -209,6 +215,57 @@ class TritonBenchDataset:
             parts.append(f"PyTorch reference implementation:\n{torch_code}")
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _extract_api_spec(gold_code: str) -> str:
+        """Extract public API signatures from gold code via AST parsing.
+
+        Produces a specification telling the model exactly which kernel functions,
+        wrapper functions, classes, and module-level aliases it must export.
+        This bridges the information gap: the model learns *what* to implement
+        (names + signatures) without seeing *how* (the implementation body).
+
+        Returns an empty string if parsing fails or no API is found.
+        """
+        if not gold_code or not gold_code.strip():
+            return ""
+
+        try:
+            tree = ast.parse(gold_code)
+        except SyntaxError:
+            logger.debug("Failed to parse gold code for API extraction")
+            return ""
+
+        lines: List[str] = []
+
+        for node in ast.iter_child_nodes(tree):
+            if isinstance(node, ast.FunctionDef):
+                # Check if decorated with @triton.jit or @triton.autotune
+                is_kernel = any(
+                    "triton" in ast.unparse(d) for d in node.decorator_list
+                )
+                params = ast.unparse(node.args)
+                if is_kernel:
+                    lines.append(f"- Kernel function: `{node.name}({params})`")
+                else:
+                    lines.append(f"- Wrapper function: `{node.name}({params})`")
+
+            elif isinstance(node, ast.ClassDef):
+                bases = ", ".join(ast.unparse(b) for b in node.bases)
+                lines.append(f"- Class: `{node.name}({bases})`")
+                for member in node.body:
+                    if isinstance(member, ast.FunctionDef):
+                        mparams = ast.unparse(member.args)
+                        lines.append(f"  - Method: `{member.name}({mparams})`")
+
+            elif isinstance(node, ast.Assign):
+                # Module-level aliases like: fn = ClassName.apply
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        value_src = ast.unparse(node.value)
+                        lines.append(f"- Module-level alias: `{target.id} = {value_src}`")
+
+        return "\n".join(lines)
 
     def get_sample(self, index: int) -> Dict[str, Any]:
         """Get a single sample by index."""

@@ -116,9 +116,6 @@ def build_agent(
     temperature: float = 0.2,
     debug: bool = True,
     log_file: str = None,
-    enable_reflection: bool = True,
-    max_reflection_retries: int = 1,
-    reflection_prompt: str | None = None,
     enable_planning: bool = False,
     system_prompt: str | None = None,
 ) -> ReActAgent:
@@ -153,9 +150,6 @@ def build_agent(
         config=config,
         enable_logging=bool(log_file),
         log_file=log_file,
-        enable_reflection=enable_reflection,
-        max_reflection_retries=max_reflection_retries,
-        reflection_prompt=reflection_prompt,
         enable_planning=enable_planning,
     )
 
@@ -167,9 +161,8 @@ def build_agent(
         ]
 
     logger.info(
-        "Agent built: model=%s provider=%s workspace=%s steps=%d reflection=%s",
+        "Agent built: model=%s provider=%s workspace=%s steps=%d",
         llm.model, llm.provider, workspace, max_iterations,
-        f"on(retries={max_reflection_retries})" if enable_reflection else "off",
     )
     return agent
 
@@ -219,14 +212,11 @@ def repl(agent: ReActAgent, sandbox_dir: str = None, session_file: str = None) -
             print(f"[Session] Restored from {session_file} ({len(agent._history)} messages)")
 
     # Banner
-    reflect = (f"on (max_retries={agent.max_reflection_retries})"
-               if agent.enable_reflection else "off")
     print("=" * 60)
     print("  Python Coding Agent")
     print(f"  Model   : {agent.llm.model}")
     print(f"  Provider: {agent.llm.provider}")
     print(f"  Tools   : {', '.join(agent.tool_registry.list_tools())}")
-    print(f"  Reflect : {reflect}")
     if sandbox_dir:
         print(f"  Sandbox : {sandbox_dir}")
     else:
@@ -414,10 +404,6 @@ if __name__ == "__main__":
                    help="LLM sampling temperature (default: 0.2).")
     p.add_argument("--debug", action="store_true",
                    help="Verbose console output.")
-    p.add_argument("--no-reflection", action="store_true",
-                   help="Disable reflection/self-verification.")
-    p.add_argument("--max-reflection-retries", type=int, default=1,
-                   help="Max reflection revision attempts.")
     p.add_argument("--plan", action="store_true",
                    help="Enable plan-then-execute mode.")
     p.add_argument("--restore", action="store_true",
@@ -457,9 +443,6 @@ if __name__ == "__main__":
         temperature=args.temperature,
         debug=args.debug,
         log_file=str(log_file),
-        enable_reflection=not args.no_reflection,
-        max_reflection_retries=args.max_reflection_retries,
-        reflection_prompt=_load_prompt(PROMPTS_DIR / "reflection.prompt"),
         enable_planning=args.plan,
     )
 

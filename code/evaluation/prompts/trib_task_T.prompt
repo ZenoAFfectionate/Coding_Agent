@@ -15,9 +15,16 @@
 ### Example Usage
 {example}
 
-## Requirements
-- Write a Triton kernel that is functionally equivalent to the PyTorch implementation above.
-- Include both the @triton.jit kernel function(s) AND the Python wrapper function with the same signature.
-- Include all necessary imports (torch, triton, triton.language as tl).
-- Save the code as `solution.py` using the file tool.
-- Do NOT include any test code or main blocks.
+## Required API (your code MUST export these exact names and signatures)
+
+{api_spec}
+
+## Rules (follow these exactly)
+1. Write a Triton kernel that is functionally equivalent to the PyTorch implementation above.
+2. You MUST use the exact function names, class names, parameter names, and module-level aliases listed above. The test harness calls these names directly — any mismatch will cause a NameError or TypeError.
+3. Include all necessary imports (torch, triton, triton.language as tl).
+4. Save the code as `solution.py` using the file tool.
+5. Do NOT include any test code or main blocks.
+6. Call tools immediately and continuously. Do NOT return text between tool calls.
+7. Once the code is written and passes the linter, call `finish` right away.
+8. Do NOT reply with text instead of calling `finish`. You MUST call the `finish` tool to end the task.

@@ -2,8 +2,15 @@
 
 {instruction}
 
-## Requirements
-- Write complete, runnable Triton code including all imports (torch, triton, triton.language as tl).
-- Include both the @triton.jit kernel function(s) AND the Python wrapper function(s) that launch them.
-- Save the code as `solution.py` using the file tool.
-- Do NOT include any test code or main blocks.
+## Required API (your code MUST export these exact names and signatures)
+
+{api_spec}
+
+## Rules (follow these exactly)
+1. Write complete, runnable Triton code including all imports (torch, triton, triton.language as tl).
+2. You MUST use the exact function names, class names, parameter names, and module-level aliases listed above. The test harness calls these names directly — any mismatch will cause a NameError or TypeError.
+3. Save the code as `solution.py` using the file tool.
+4. Do NOT include any test code or main blocks.
+5. Call tools immediately and continuously. Do NOT return text between tool calls.
+6. Once the code is written and passes the linter, call `finish` right away.
+7. Do NOT reply with text instead of calling `finish`. You MUST call the `finish` tool to end the task.
